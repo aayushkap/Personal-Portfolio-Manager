@@ -1,5 +1,4 @@
 """
-Production-grade async scraper for StockAnalysis.com
 Scrapes overview, financials, dividends, statistics, and ratios for given tickers.
 Returns all data as a single nested dictionary.
 """
@@ -17,7 +16,6 @@ from playwright_stealth import stealth_async
 class StockAnalysisScraper:
     """
     Scraper for StockAnalysis.com that collects financial data for a list of tickers.
-    Uses stealth techniques and human-like behaviour to avoid detection.
     """
 
     # Common user agents and viewports for fingerprint rotation
@@ -38,7 +36,7 @@ class StockAnalysisScraper:
 
     def __init__(
         self,
-        tickers: List[Dict[str, str]],
+        ticker: Dict[str, str],
         headless: bool = True,
         timeout: int = 45000,
         max_retries: int = 3,
@@ -49,14 +47,12 @@ class StockAnalysisScraper:
         :param timeout: Navigation timeout in milliseconds
         :param max_retries: Number of retries for failed navigations
         """
-        self.tickers = tickers
+        self.ticker = ticker
         self.headless = headless
         self.timeout = timeout
         self.max_retries = max_retries
 
-    # ----------------------------------------------------------------------
     # Human‑like behaviour helpers
-    # ----------------------------------------------------------------------
     @staticmethod
     async def _jitter(lo: float = 0.4, hi: float = 1.8) -> None:
         """Random pause to simulate human reading speed."""
@@ -84,13 +80,13 @@ class StockAnalysisScraper:
             await asyncio.sleep(random.uniform(0.08, 0.25))
 
     async def _safe_goto(
-        self, page: Page, url: str, wait_for: str = "networkidle"
+        self, page: Page, url: str, wait_for: str = "domcontentloaded"
     ) -> None:
         """Navigate with retries and human pacing."""
         for attempt in range(self.max_retries):
             try:
                 await page.goto(url, wait_until=wait_for, timeout=self.timeout)
-                await self._jitter(1.0, 2.5)
+                await self._jitter(1.0, 2)
                 return
             except Exception as exc:
                 if attempt == self.max_retries - 1:
@@ -101,9 +97,7 @@ class StockAnalysisScraper:
                 )
                 await asyncio.sleep(wait)
 
-    # ----------------------------------------------------------------------
     # Context creation with stealth and fingerprint spoofing
-    # ----------------------------------------------------------------------
     async def _create_context(self, browser: Browser) -> BrowserContext:
         """Create a new browser context with random user agent and viewport, plus stealth init scripts."""
         ua = random.choice(self.USER_AGENTS)
@@ -134,15 +128,13 @@ class StockAnalysisScraper:
 
         return context
 
-    # ----------------------------------------------------------------------
     # Page‑specific scraping methods
-    # ----------------------------------------------------------------------
     async def _scrape_overview(
         self, page: Page, exchange: str, symbol: str
     ) -> Dict[str, Any]:
         """Scrape the overview page (price, change, key stats)."""
         url = f"https://stockanalysis.com/quote/{exchange}/{symbol}/"
-        print(f"  Overview → {url}")
+
         await self._safe_goto(page, url)
         await self._human_mouse_wander(page)
         await self._human_scroll(page)
@@ -191,7 +183,7 @@ class StockAnalysisScraper:
             pass
 
         data["stats"] = stats
-        await self._jitter(0.8, 1.8)
+        await self._jitter(0.8, 1.5)
         return data
 
     async def _scrape_financials(
@@ -199,7 +191,7 @@ class StockAnalysisScraper:
     ) -> Dict[str, Any]:
         """Scrape the financials table (income statement / balance sheet)."""
         url = f"https://stockanalysis.com/quote/{exchange}/{symbol}/financials/"
-        print(f"  Financials → {url}")
+
         await self._safe_goto(page, url)
         await self._human_mouse_wander(page)
 
@@ -209,7 +201,7 @@ class StockAnalysisScraper:
             await page.wait_for_selector("table", timeout=15000)
 
         await self._human_scroll(page, passes=5)
-        await self._jitter(0.8, 1.5)
+        await self._jitter(0.8, 1.25)
 
         headers = []
         rows = []
@@ -241,7 +233,7 @@ class StockAnalysisScraper:
             "headers": headers,
             "rows": rows,
         }
-        await self._jitter(1.0, 2.2)
+        await self._jitter(1.0, 2)
         return result
 
     async def _scrape_dividends(
@@ -249,7 +241,7 @@ class StockAnalysisScraper:
     ) -> Dict[str, Any]:
         """Scrape the dividend history table."""
         url = f"https://stockanalysis.com/quote/{exchange}/{symbol}/dividend/"
-        print(f"  Dividends → {url}")
+
         await self._safe_goto(page, url)
         await self._human_mouse_wander(page)
 
@@ -259,7 +251,7 @@ class StockAnalysisScraper:
             await page.wait_for_selector("table", timeout=15000)
 
         await self._human_scroll(page, passes=4)
-        await self._jitter(0.6, 1.4)
+        await self._jitter(0.6, 1.2)
 
         headers = []
         rows = []
@@ -289,7 +281,7 @@ class StockAnalysisScraper:
             "headers": headers,
             "rows": rows,
         }
-        await self._jitter(0.8, 2.0)
+        await self._jitter(0.8, 1.5)
         return result
 
     async def _scrape_statistics(
@@ -297,7 +289,7 @@ class StockAnalysisScraper:
     ) -> Dict[str, Any]:
         """Scrape the statistics page (detailed ratios and metrics)."""
         url = f"https://stockanalysis.com/quote/{exchange}/{symbol}/statistics/"
-        print(f"  Statistics → {url}")
+
         await self._safe_goto(page, url)
         await self._human_mouse_wander(page)
 
@@ -307,7 +299,7 @@ class StockAnalysisScraper:
             pass
 
         await self._human_scroll(page, passes=5)
-        await self._jitter(0.8, 1.6)
+        await self._jitter(0.8, 1.4)
 
         data = {
             "symbol": symbol,
@@ -373,7 +365,7 @@ class StockAnalysisScraper:
         except Exception as exc:
             data["error"] = str(exc)
 
-        await self._jitter(1.0, 2.2)
+        await self._jitter(1.0, 1.5)
         return data
 
     async def _scrape_ratios(
@@ -381,7 +373,7 @@ class StockAnalysisScraper:
     ) -> Dict[str, Any]:
         """Scrape the financial ratios page (historical time series)."""
         url = f"https://stockanalysis.com/quote/{exchange}/{symbol}/financials/ratios/"
-        print(f"  Ratios → {url}")
+
         await self._safe_goto(page, url)
         await self._human_mouse_wander(page)
 
@@ -391,7 +383,7 @@ class StockAnalysisScraper:
             await page.wait_for_selector("table", timeout=15000)
 
         await self._human_scroll(page, passes=5)
-        await self._jitter(0.8, 1.5)
+        await self._jitter(0.8, 1.25)
 
         headers = []
         rows = []
@@ -434,12 +426,10 @@ class StockAnalysisScraper:
             "rows": rows,
             "return_metrics_rows": return_rows,
         }
-        await self._jitter(1.0, 2.2)
+        await self._jitter(1.0, 2)
         return result
 
-    # ----------------------------------------------------------------------
     # Ticker‑level orchestration
-    # ----------------------------------------------------------------------
     async def _scrape_ticker(
         self, browser: Browser, ticker: Dict[str, str]
     ) -> Dict[str, Any]:
@@ -447,7 +437,6 @@ class StockAnalysisScraper:
         exchange = ticker["exchange"]
         symbol = ticker["symbol"]
         key = f"{exchange.upper()}:{symbol}"
-        print(f"\n--- {key} ---")
 
         context = await self._create_context(browser)
         page = await context.new_page()
@@ -469,21 +458,19 @@ class StockAnalysisScraper:
 
         try:
             result["overview"] = await self._scrape_overview(page, exchange, symbol)
-            await self._jitter(2.0, 4.0)
+            await self._jitter(1.5, 2.0)
 
             result["financials"] = await self._scrape_financials(page, exchange, symbol)
-            await self._jitter(2.5, 5.0)
+            await self._jitter(1.5, 2.0)
 
             result["dividends"] = await self._scrape_dividends(page, exchange, symbol)
-            await self._jitter(2.0, 4.5)
+            await self._jitter(1.5, 2)
 
             result["statistics"] = await self._scrape_statistics(page, exchange, symbol)
-            await self._jitter(2.5, 5.0)
+            await self._jitter(1.5, 2)
 
             result["ratios"] = await self._scrape_ratios(page, exchange, symbol)
-            await self._jitter(2.0, 4.0)
-
-            print(f"  Completed {key}")
+            await self._jitter(1.5, 2)
 
         except Exception as exc:
             print(f"  Failed {key}: {exc}")
@@ -498,10 +485,8 @@ class StockAnalysisScraper:
 
         return result
 
-    # ----------------------------------------------------------------------
     # Public API
-    # ----------------------------------------------------------------------
-    async def scrape_all(self) -> Dict[str, Any]:
+    async def scrape(self) -> Dict[str, Any]:
         """
         Scrape all configured tickers and return a dictionary with results.
         The dictionary has ticker keys (e.g. 'DFM:DEWA') containing the scraped data.
@@ -523,8 +508,8 @@ class StockAnalysisScraper:
                 ],
             )
 
-            for ticker in self.tickers:
-                ticker_result = await self._scrape_ticker(browser, ticker)
+            if self.ticker:
+                ticker_result = await self._scrape_ticker(browser, self.ticker)
                 key = ticker_result["ticker"]
                 all_results[key] = ticker_result
 
@@ -534,17 +519,17 @@ class StockAnalysisScraper:
 
 
 # Example usage
-if __name__ == "__main__":
+# if __name__ == "__main__":
 
-    async def main():
-        tickers = [
-            {"exchange": "dfm", "symbol": "DEWA"},
-        ]
-        scraper = StockAnalysisScraper(tickers, headless=True)
-        data = await scraper.scrape_all()
-        import json
+#     async def main():
+#         tickers = [
+#             {"exchange": "dfm", "symbol": "DEWA"},
+#         ]
+#         scraper = StockAnalysisScraper(tickers, headless=True)
+#         data = await scraper.scrape_all()
+#         import json
 
-        with open("filename.json", "w") as f:
-            json.dump(data, f, indent=2)
+#         with open("filename.json", "w") as f:
+#             json.dump(data, f, indent=2)
 
-    asyncio.run(main())
+#     asyncio.run(main())

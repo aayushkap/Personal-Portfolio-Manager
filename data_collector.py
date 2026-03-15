@@ -200,7 +200,7 @@ class StockAnalysisScraper:
         try:
             await page.wait_for_selector("#main-table", timeout=20000)
         except Exception:
-            await page.wait_for_selector("table", timeout=15000)
+            await page.wait_for_selector("table", timeout=5000)
 
         await self._human_scroll(page, passes=5)
         await self._jitter(0.8, 1.25)
@@ -446,7 +446,6 @@ class StockAnalysisScraper:
     async def _scrape_ticker(
         self, browser: Browser, ticker: Dict[str, str]
     ) -> Dict[str, Any]:
-        """Run all scrapes for a single ticker and return combined data."""
         exchange = ticker["exchange"]
         symbol = ticker["symbol"]
         key = f"{exchange.upper()}:{symbol}"
@@ -455,7 +454,6 @@ class StockAnalysisScraper:
         page = await context.new_page()
         await stealth_async(page)
 
-        # Block heavy resources
         await page.route(
             "**/*.{png,jpg,jpeg,gif,svg,woff,woff2,ttf,mp4,webm}",
             lambda route: route.abort(),
@@ -469,37 +467,43 @@ class StockAnalysisScraper:
 
         result = {"ticker": key, "scraped_at": datetime.utcnow().isoformat()}
 
-        try:
+        # ── Each section is independent — one failure never blocks the others ──
+        sections = [
+            ("ohlc", lambda: self.get_ohlc(exchange, symbol)),
+            ("overview", lambda: self._scrape_overview(page, exchange, symbol)),
+            ("financials", lambda: self._scrape_financials(page, exchange, symbol)),
+            ("dividends", lambda: self._scrape_dividends(page, exchange, symbol)),
+            ("statistics", lambda: self._scrape_statistics(page, exchange, symbol)),
+            ("ratios", lambda: self._scrape_ratios(page, exchange, symbol)),
+        ]
+
+        for section_name, scrape_fn in sections:
             try:
-                result["ohlc"] = await self.get_ohlc(exchange, symbol)
-            except Exception as e:
-                result["ohlc"] = []
+                result[section_name] = await scrape_fn()
+                if section_name != "ohlc":
+                    await self._jitter(1.5, 2.0)
+            except Exception as exc:
+                print(f"  [SKIP] {key} › {section_name}: {exc}")
+                result[section_name] = {
+                    "error": str(exc)
+                }  # section failed, not the ticker
 
-            result["overview"] = await self._scrape_overview(page, exchange, symbol)
-            await self._jitter(1.5, 2.0)
+        # Ticker is only fully failed if EVERY section errored
+        all_failed = all(
+            isinstance(result.get(s), dict) and "error" in result.get(s, {})
+            for s in ("overview", "financials", "dividends", "statistics", "ratios")
+        )
+        if all_failed:
+            result["error"] = "all sections failed"
 
-            result["financials"] = await self._scrape_financials(page, exchange, symbol)
-            await self._jitter(1.5, 2.0)
-
-            result["dividends"] = await self._scrape_dividends(page, exchange, symbol)
-            await self._jitter(1.5, 2)
-
-            result["statistics"] = await self._scrape_statistics(page, exchange, symbol)
-            await self._jitter(1.5, 2)
-
-            result["ratios"] = await self._scrape_ratios(page, exchange, symbol)
-            await self._jitter(1.5, 2)
-
-        except Exception as exc:
-            print(f"  Failed {key}: {exc}")
-            result["error"] = str(exc)
-
-        finally:
+        try:
             await context.close()
-            # Cool-down between tickers
-            cooldown = random.uniform(15.0, 30.0)
-            print(f"Cooling down {cooldown:.1f}s …")
-            await asyncio.sleep(cooldown)
+        except Exception:
+            pass
+
+        cooldown = random.uniform(15.0, 30.0)
+        print(f"Cooling down {cooldown:.1f}s …")
+        await asyncio.sleep(cooldown)
 
         return result
 

@@ -7,7 +7,7 @@ from typing import Optional
 import json
 
 SNAPSHOT_FILE = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "portfolio_snapshots.csv"
+    os.path.dirname(os.path.abspath(__file__)), "cache", "portfolio_snapshots.csv"
 )
 
 COLUMNS = [

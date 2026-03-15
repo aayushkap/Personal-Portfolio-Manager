@@ -269,7 +269,47 @@ class PortfolioAnalytics:
             if "error" not in (s := self.ticker_summary(t)) and s["market_value_aed"]
         ]
 
+    # In analytics.py — add to PortfolioAnalytics class
+    def run(self) -> dict:
+        """Single call — returns all analytics data and records daily snapshot."""
 
-obj = PortfolioAnalytics()
-print(obj.portfolio_summary())
-print(obj.chart_cost_vs_value())
+        summary = self.portfolio_summary()
+        trends = self.trend_metrics()
+        pnl_bars = self.chart_pnl_per_ticker()
+        cost_vs = self.chart_cost_vs_value()
+        sectors = self.chart_sector_allocation()
+
+        # Per-ticker OHLC + dividend chart data
+        charts = {t: self.chart_ohlc_with_dividends(t) for t in self._all_tickers()}
+
+        # Record daily snapshot
+        snapshotter = PortfolioSnapshotter()
+        last = snapshotter._last_row()
+        prev_invested = float(last["total_invested_aed"]) if last else 0.0
+        cash_flow_today = max(0.0, summary["total_invested_aed"] - prev_invested)
+        snapshot = snapshotter.record(
+            market_value=summary["total_market_value_aed"],
+            total_invested=summary["total_invested_aed"],
+            cash_flow_today=cash_flow_today,
+        )
+
+        return {
+            "summary": summary,
+            "trends": trends,
+            "snapshot": snapshot,
+            "charts": {
+                "pnl_per_ticker": pnl_bars,
+                "cost_vs_value": cost_vs,
+                "sector_allocation": sectors,
+                "ohlc": charts,
+            },
+        }
+
+
+if __name__ == "__main__":
+    results = PortfolioAnalytics().run()
+    with open("analytics_output.json", "w") as f:
+        json.dump(results, f, indent=2, default=str)
+    print(
+        f"Done — Value: AED {results['summary']['total_market_value_aed']:,.2f} | P&L: {results['summary']['total_unrealized_pnl_pct']:+.2f}%"
+    )

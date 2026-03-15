@@ -305,6 +305,7 @@ class CacheManager:
                     "cost_per_share_aed": parse_aed(str(p.get("Cost per Share", ""))),
                     "commission_aed": parse_aed(str(p.get("Commision Paid", ""))),
                     "total_cost_aed": parse_aed(str(p.get("Total Cost", ""))),
+                    "sector": p.get("Sector") or None,
                     "next_dividend_date": p.get("Next Expected Dividend Date") or None,
                     "next_dividend_amount_aed": parse_aed(
                         str(p.get("Next Expected Dividend Amount", ""))

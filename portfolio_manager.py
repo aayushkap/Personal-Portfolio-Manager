@@ -7,6 +7,8 @@ from data_collector import StockAnalysisScraper
 from cache_manager import CacheManager
 from collections import defaultdict
 
+import asyncio
+
 load_dotenv()
 
 SERVICE_ACCOUNT_FILE = os.path.join(
@@ -44,7 +46,7 @@ class PortfolioManager:
         tickers = set()
 
         print("Fetching Google Sheets data...")
-        investments = self.fetch_investments()[:1]
+        investments = self.fetch_investments()
         if not investments:
             print("No investments found.")
             return {}

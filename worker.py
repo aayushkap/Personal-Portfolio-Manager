@@ -49,34 +49,34 @@ async def scrape_job():
 
 
 async def main():
-    scheduler = AsyncIOScheduler()
+    # scheduler = AsyncIOScheduler()
 
     # During market hours (ADX/DFM: Sun–Thu 10:00–15:00 GST = UTC+4)
     # Run every 15 min during market hours, once at close
-    scheduler.add_job(
-        scrape_job,
-        "cron",
-        day_of_week="sun-thu",
-        hour="10-14",
-        minute="*/15",
-        id="scrape_intraday",
-        max_instances=1,  # never overlap
-        misfire_grace_time=120,
-    )
+    # scheduler.add_job(
+    #     scrape_job,
+    #     "cron",
+    #     day_of_week="sun-thu",
+    #     hour="10-14",
+    #     minute="*/15",
+    #     id="scrape_intraday",
+    #     max_instances=1,  # never overlap
+    #     misfire_grace_time=120,
+    # )
 
     # End-of-day snapshot (15:10 GST — 10 min after close)
-    scheduler.add_job(
-        scrape_job,
-        "cron",
-        day_of_week="sun-thu",
-        hour=15,
-        minute=10,
-        id="scrape_eod",
-        max_instances=1,
-    )
+    # scheduler.add_job(
+    #     scrape_job,
+    #     "cron",
+    #     day_of_week="sun-thu",
+    #     hour=15,
+    #     minute=10,
+    #     id="scrape_eod",
+    #     max_instances=1,
+    # )
 
-    scheduler.start()
-    logger.info("Worker started — scraping every 15min Sun–Thu 10:00–15:00 GST")
+    # scheduler.start()
+    logger.info("Worker started — scraping every 15min Sun-Thu 10:00-15:00 GST")
 
     # Run once immediately on startup
     await scrape_job()
@@ -86,7 +86,7 @@ async def main():
         while True:
             await asyncio.sleep(60)
     except (KeyboardInterrupt, SystemExit):
-        scheduler.shutdown()
+        # scheduler.shutdown()
         logger.info("Worker stopped.")
 
 

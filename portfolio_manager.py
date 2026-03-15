@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 
 from data_collector import StockAnalysisScraper
 from cache_manager import CacheManager
+from collections import defaultdict
 
 load_dotenv()
 
@@ -39,31 +40,36 @@ class PortfolioManager:
             traceback.print_exc()
 
     async def run(self):
-
         results = []
         tickers = set()
 
         print("Fetching Google Sheets data...")
-        investments = self.fetch_investments()
+        investments = self.fetch_investments()[:1]
         if not investments:
             print("No investments found.")
             return {}
 
+        #  Group purchases by ticker key
+        purchases_by_ticker = defaultdict(list)
+        for inv in investments:
+            symbol = inv.get("Symbol")
+            if symbol and ":" in symbol:
+                purchases_by_ticker[symbol].append(inv)
+
         # Collect unique tickers
-        for investment in investments[:1]:
-            instrument = investment.get("Symbol")
-            split = instrument.split(":")
-
-            exchange = split[0] or None
-            ticker = split[1] or None
-
-            if exchange and ticker:
-                tickers.add((exchange, ticker))
+        for symbol in purchases_by_ticker:
+            ex, sym = symbol.split(":", 1)
+            if ex and sym:
+                tickers.add((ex, sym))
 
         tickers = [{"exchange": ex, "symbol": sym} for ex, sym in tickers]
-
         print(f"Final list of Tickers: {tickers}")
 
+        cache = CacheManager()
+        for ticker_key, purchase_list in purchases_by_ticker.items():
+            cache.save_purchases(ticker_key, purchase_list)
+
+        #  Scrape
         semaphore = asyncio.Semaphore(2)
 
         async def scrape_with_limit(ticker):
@@ -73,10 +79,8 @@ class PortfolioManager:
                 return await scraper.scrape()
 
         tasks = [scrape_with_limit(ticker) for ticker in tickers]
-
         results = await asyncio.gather(*tasks)
 
-        cache = CacheManager()
         cache.save_batch(results)
 
         return results

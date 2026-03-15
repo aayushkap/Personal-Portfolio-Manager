@@ -8,6 +8,7 @@ import random
 import re
 from datetime import datetime
 from typing import Dict, List, Any, Optional
+from dateutil import parser
 
 from playwright.async_api import async_playwright, Browser, Page, BrowserContext
 from playwright_stealth import stealth_async
@@ -265,12 +266,22 @@ class StockAnalysisScraper:
             for tr in tr_els:
                 tds = await tr.query_selector_all("td")
                 values = [(await td.inner_text()).strip() for td in tds]
+
                 if values:
                     row_dict = {}
                     for i, v in enumerate(values):
                         col = headers[i] if i < len(headers) else f"col_{i}"
+
+                        if col in {"Ex-Dividend Date", "Record Date", "Pay Date"}:
+                            try:
+                                v = parser.parse(v).date().isoformat()
+                            except Exception:
+                                pass
+
                         row_dict[col] = v
+
                     rows.append(row_dict)
+
         except Exception as exc:
             rows = [{"error": str(exc)}]
 
@@ -282,6 +293,7 @@ class StockAnalysisScraper:
             "headers": headers,
             "rows": rows,
         }
+
         await self._jitter(0.8, 1.5)
         return result
 
@@ -458,7 +470,10 @@ class StockAnalysisScraper:
         result = {"ticker": key, "scraped_at": datetime.utcnow().isoformat()}
 
         try:
-            result["ohlc"] = await self.get_ohlc(exchange, symbol)
+            try:
+                result["ohlc"] = await self.get_ohlc(exchange, symbol)
+            except Exception as e:
+                result["ohlc"] = []
 
             result["overview"] = await self._scrape_overview(page, exchange, symbol)
             await self._jitter(1.5, 2.0)
@@ -482,7 +497,7 @@ class StockAnalysisScraper:
         finally:
             await context.close()
             # Cool-down between tickers
-            cooldown = random.uniform(4.0, 9.0)
+            cooldown = random.uniform(15.0, 30.0)
             print(f"Cooling down {cooldown:.1f}s …")
             await asyncio.sleep(cooldown)
 

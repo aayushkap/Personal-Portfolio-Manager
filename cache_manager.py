@@ -176,15 +176,20 @@ class CacheManager:
 
     #  Fundamentals (plain JSON overwrite)
     def save_fundamentals(self, ticker_key: str, data: Dict[str, Any]) -> bool:
-        """
-        Write overview, financials, dividends, statistics, ratios to fundamentals.json.
-        Skipped if data contains an error. Returns True if written.
-        """
         if self._has_error(data):
             print(f"  [cache] SKIP fundamentals {ticker_key} — error in result.")
             return False
 
-        fundamental_keys = (
+        #  Load existing file to preserve keys we don't own (e.g. purchases)
+        path = self._fundamentals_path(ticker_key)
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+        else:
+            existing = {}
+
+        # Scrape-owned keys — overwrite these
+        scrape_keys = (
             "overview",
             "financials",
             "dividends",
@@ -193,10 +198,10 @@ class CacheManager:
             "ticker",
             "scraped_at",
         )
-        payload = {k: data[k] for k in fundamental_keys if k in data}
+        payload = {**existing}  # start with everything (preserves purchases)
+        payload.update({k: data[k] for k in scrape_keys if k in data})
         payload["last_updated"] = data.get("scraped_at", datetime.utcnow().isoformat())
 
-        path = self._fundamentals_path(ticker_key)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2, ensure_ascii=False)
         print(f"  [cache] SAVED fundamentals {ticker_key}")
@@ -261,3 +266,70 @@ class CacheManager:
                 "ohlc_rows": ohlc_count,
             }
         return out
+
+    def save_purchases(self, ticker_key: str, purchases: list) -> None:
+        """
+        Upsert purchase records into fundamentals.json.
+        Purchases are always overwritten (source of truth = Google Sheets).
+        Creates fundamentals.json stub if it doesn't exist yet.
+        """
+        path = self._fundamentals_path(ticker_key)
+
+        # Load existing or start fresh
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        else:
+            data = {
+                "ticker": ticker_key,
+                "last_updated": None,
+            }
+
+        # Clean up AED strings → floats for easier downstream use
+        def parse_aed(val: str) -> Optional[float]:
+            if not val:
+                return None
+            cleaned = val.replace("AED", "").replace(",", "").strip()
+            try:
+                return float(cleaned)
+            except ValueError:
+                return None
+
+        cleaned_purchases = []
+        for p in purchases:
+            cleaned_purchases.append(
+                {
+                    "platform": p.get("Platform"),
+                    "purchase_date": p.get("Purchase Date") or None,
+                    "shares": p.get("Shares"),
+                    "cost_per_share_aed": parse_aed(str(p.get("Cost per Share", ""))),
+                    "commission_aed": parse_aed(str(p.get("Commision Paid", ""))),
+                    "total_cost_aed": parse_aed(str(p.get("Total Cost", ""))),
+                    "next_dividend_date": p.get("Next Expected Dividend Date") or None,
+                    "next_dividend_amount_aed": parse_aed(
+                        str(p.get("Next Expected Dividend Amount", ""))
+                    ),
+                }
+            )
+
+        data["purchases"] = cleaned_purchases
+
+        # Derived aggregates — useful for P&L later
+        total_shares = sum(p["shares"] for p in cleaned_purchases if p["shares"])
+        total_cost = sum(
+            p["total_cost_aed"] for p in cleaned_purchases if p["total_cost_aed"]
+        )
+        data["purchases_summary"] = {
+            "total_shares": total_shares,
+            "total_cost_aed": round(total_cost, 2),
+            "avg_cost_per_share_aed": (
+                round(total_cost / total_shares, 4) if total_shares else None
+            ),
+            "num_lots": len(cleaned_purchases),
+        }
+
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        print(
+            f"  [cache] PURCHASES saved {ticker_key} ({len(cleaned_purchases)} lot(s))"
+        )

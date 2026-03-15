@@ -11,6 +11,7 @@ from typing import Dict, List, Any, Optional
 
 from playwright.async_api import async_playwright, Browser, Page, BrowserContext
 from playwright_stealth import stealth_async
+from tvDatafeed import TvDatafeed, Interval
 
 
 class StockAnalysisScraper:
@@ -457,6 +458,8 @@ class StockAnalysisScraper:
         result = {"ticker": key, "scraped_at": datetime.utcnow().isoformat()}
 
         try:
+            result["ohlc"] = await self.get_ohlc(exchange, symbol)
+
             result["overview"] = await self._scrape_overview(page, exchange, symbol)
             await self._jitter(1.5, 2.0)
 
@@ -480,10 +483,26 @@ class StockAnalysisScraper:
             await context.close()
             # Cool-down between tickers
             cooldown = random.uniform(4.0, 9.0)
-            print(f"  Cooling down {cooldown:.1f}s …")
+            print(f"Cooling down {cooldown:.1f}s …")
             await asyncio.sleep(cooldown)
 
         return result
+
+    async def get_ohlc(
+        self, exchange: str, symbol: str, interval=Interval.in_15_minute, bars=100
+    ):
+        tv = TvDatafeed()
+        df = tv.get_hist(
+            symbol=symbol,
+            exchange=exchange,
+            interval=interval,
+            n_bars=bars,
+        )
+        df = df.reset_index()
+        df = df.rename(columns={"index": "datetime"})
+        df["datetime"] = df["datetime"].astype(str)
+
+        return df.to_dict(orient="records")
 
     # Public API
     async def scrape(self) -> Dict[str, Any]:

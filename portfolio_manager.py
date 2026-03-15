@@ -3,7 +3,8 @@ import os
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
-from stock_analysis_scraper import StockAnalysisScraper
+from data_collector import StockAnalysisScraper
+from cache_manager import CacheManager
 
 load_dotenv()
 
@@ -49,7 +50,7 @@ class PortfolioManager:
             return {}
 
         # Collect unique tickers
-        for investment in investments:
+        for investment in investments[:1]:
             instrument = investment.get("Symbol")
             split = instrument.split(":")
 
@@ -74,6 +75,9 @@ class PortfolioManager:
         tasks = [scrape_with_limit(ticker) for ticker in tickers]
 
         results = await asyncio.gather(*tasks)
+
+        cache = CacheManager()
+        cache.save_batch(results)
 
         return results
 

@@ -25,21 +25,61 @@ class PortfolioManager:
 
     #  GOOGLE SHEETS
     def fetch_investments(self):
-        if not os.path.exists(SERVICE_ACCOUNT_FILE):
-            print(f"ERROR: JSON not found at: {SERVICE_ACCOUNT_FILE}")
-            return None
         try:
             gc = gspread.service_account(filename=SERVICE_ACCOUNT_FILE)
             sh = gc.open_by_key(SPREADSHEET_ID)
             worksheet = sh.get_worksheet(0)
-            rows = worksheet.get_all_records()
+
+            # Get values (for data) and formulas (for IMAGE cells) separately
+            rows = worksheet.get_all_records()  # rendered values
+            formula_rows = worksheet.get_all_values(
+                value_render_option="FORMULA"
+            )  # raw formulas
+
+            # Build a map of row_index → logo_url by parsing IMAGE() formula
+            import re
+
+            logo_col_index = None
+            headers = formula_rows[0] if formula_rows else []
+
+            # Find which column is "Logo"
+            if "Logo" in headers:
+                logo_col_index = headers.index("Logo")
+
+            for i, row in enumerate(rows):
+                if logo_col_index is not None and i + 1 < len(formula_rows):
+                    formula_cell = formula_rows[i + 1][
+                        logo_col_index
+                    ]  # +1 to skip header
+                    # Parse: =IMAGE("https://...") or =IMAGE(A1) or =IMAGE("url", mode)
+                    match = re.search(r'IMAGE\("([^"]+)"', formula_cell, re.IGNORECASE)
+                    if match:
+                        row["logo_url"] = match.group(1)
+                    else:
+                        row["logo_url"] = None
+                else:
+                    row["logo_url"] = None
+
             return [r for r in rows if r.get("Symbol") and ":" in str(r.get("Symbol"))]
-        except gspread.exceptions.SpreadsheetNotFound:
-            print("ERROR: Share the sheet with your service account email.")
+
         except Exception:
             import traceback
 
             traceback.print_exc()
+
+    def get_tickers(self) -> list[dict]:
+        investments = self.fetch_investments()
+        if not investments:
+            return []
+        seen = set()
+        tickers = []
+        for inv in investments:
+            symbol = inv.get("Symbol", "")
+            if ":" in symbol and symbol not in seen:
+                seen.add(symbol)
+                exchange, sym = symbol.split(":", 1)
+                tickers.append({"exchange": exchange, "symbol": sym})
+        return tickers
 
     async def run(self):
         results = []
@@ -88,21 +128,21 @@ class PortfolioManager:
         return results
 
 
-if __name__ == "__main__":
-    import asyncio
+# if __name__ == "__main__":
+#     import asyncio
 
-    async def main():
+#     async def main():
 
-        start = datetime.now()
+#         start = datetime.now()
 
-        manager = PortfolioManager()
-        results = await manager.run()
+#         manager = PortfolioManager()
+#         results = await manager.run()
 
-        import json
+#         import json
 
-        with open("filename.json", "w") as f:
-            json.dump(results, f, indent=2)
+#         with open("filename.json", "w") as f:
+#             json.dump(results, f, indent=2)
 
-        print(datetime.now() - start)
+#         print(datetime.now() - start)
 
-    asyncio.run(main())
+#     asyncio.run(main())

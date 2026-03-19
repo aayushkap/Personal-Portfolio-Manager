@@ -467,7 +467,7 @@ class StockAnalysisScraper:
 
         result = {"ticker": key, "scraped_at": datetime.utcnow().isoformat()}
 
-        # ── Each section is independent — one failure never blocks the others ──
+        #  Each section is independent — one failure never blocks the others
         sections = [
             ("ohlc", lambda: self.get_ohlc(exchange, symbol)),
             ("overview", lambda: self._scrape_overview(page, exchange, symbol)),
@@ -508,7 +508,7 @@ class StockAnalysisScraper:
         return result
 
     async def get_ohlc(
-        self, exchange: str, symbol: str, interval=Interval.in_15_minute, bars=100
+        self, exchange: str, symbol: str, interval=Interval.in_15_minute, bars=500
     ):
         tv = TvDatafeed()
         df = tv.get_hist(

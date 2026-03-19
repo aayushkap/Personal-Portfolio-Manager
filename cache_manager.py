@@ -310,6 +310,7 @@ class CacheManager:
                     "next_dividend_amount_aed": parse_aed(
                         str(p.get("Next Expected Dividend Amount", ""))
                     ),
+                    "logo_url": p.get("logo_url") or None,
                 }
             )
 

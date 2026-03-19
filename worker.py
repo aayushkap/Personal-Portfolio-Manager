@@ -2,13 +2,16 @@
 
 import asyncio
 import logging
+import json
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from portfolio_manager import PortfolioManager
+from main import PortfolioManager
 from analytics import PortfolioAnalytics
 from portfolio_snapshot import PortfolioSnapshotter
 from cache_manager import CacheManager
+from data_collector import StockAnalysisScraper
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
@@ -16,77 +19,118 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-async def scrape_job():
-    """Full scrape + snapshot. Runs on schedule."""
-    logger.info(" Scrape job starting ")
+async def ohlc_job():
+    """Lightweight — fetches OHLC only. Runs every 30min during market hours."""
+    logger.info(" OHLC job starting ")
     try:
         manager = PortfolioManager()
-        await manager.run()  # scrapes all tickers, saves to cache
-
-        # After scrape, record daily snapshot
-        analytics = PortfolioAnalytics()
+        tickers = manager.get_tickers()
         cache = CacheManager()
-        snapshotter = PortfolioSnapshotter()
-        summary = analytics.portfolio_summary()
 
-        market_value = summary["total_market_value_aed"]
-        total_invested = summary["total_invested_aed"]
+        for ticker in tickers:
+            try:
+                # StockAnalysisScraper expects ticker dict, get_ohlc is on the instance
+                scraper = StockAnalysisScraper(ticker=ticker)
+                ohlc = await scraper.get_ohlc(
+                    exchange=ticker["exchange"],
+                    symbol=ticker["symbol"],
+                    bars=100,
+                )
+                ticker_key = f"{ticker['exchange'].upper()}:{ticker['symbol']}"
+                stat = cache.append_ohlc(ticker_key, ohlc)
+                logger.info(f"  {ticker_key} +{stat.get('appended', 0)} bars")
 
-        # Detect new purchases today by comparing invested vs last snapshot
-        last = snapshotter._last_row()
-        prev_invested = float(last["total_invested_aed"]) if last else 0.0
-        cash_flow_today = max(0.0, total_invested - prev_invested)  # only inflows
-
-        snapshotter.record(
-            market_value=market_value,
-            total_invested=total_invested,
-            cash_flow_today=cash_flow_today,
-        )
-        logger.info(f" Scrape job done | Portfolio: AED {market_value:,.2f} ")
+                await snapshot_job()
+            except Exception:
+                logger.exception(f"  OHLC failed: {ticker}")
 
     except Exception:
-        logger.exception("Scrape job failed")
+        logger.exception("OHLC job failed")
+
+
+async def fundamentals_job():
+    """Heavy — full scrape (overview, financials, dividends, etc). Runs once daily."""
+    logger.info(" Fundamentals job starting ")
+    try:
+        manager = PortfolioManager()
+        await manager.run()  # full scrape, saves to cache
+
+        # Write analytics JSON + record snapshot
+        results = PortfolioAnalytics().run()
+        with open("analytics_output.json", "w") as f:
+            json.dump(results, f, indent=2, default=str)
+
+        ret = results["summary"]["returns"]
+        logger.info(
+            f" Fundamentals done | "
+            f"Value: AED {ret['total_market_value_aed']:,.2f} | "
+            f"P&L: {ret['price_return_pct']:+.2f}% | "
+            f"Total Return: {ret['total_return_pct']:+.2f}% "
+        )
+
+        await snapshot_job()
+
+    except Exception:
+        logger.exception("Fundamentals job failed")
+
+
+async def snapshot_job():
+    """Records end-of-day portfolio snapshot to CSV."""
+    logger.info(" Snapshot job ")
+    try:
+        analytics = PortfolioAnalytics()
+        summary = analytics.run()
+
+        logger.info(f"  Snapshot saved. Analytics done.")
+
+    except Exception:
+        logger.exception("Snapshot job failed")
 
 
 async def main():
-    # scheduler = AsyncIOScheduler()
+    scheduler = AsyncIOScheduler(timezone=ZoneInfo("Asia/Dubai"))
 
-    # During market hours (ADX/DFM: Sun–Thu 10:00–15:00 GST = UTC+4)
-    # Run every 15 min during market hours, once at close
-    # scheduler.add_job(
-    #     scrape_job,
-    #     "cron",
-    #     day_of_week="sun-thu",
-    #     hour="10-14",
-    #     minute="*/15",
-    #     id="scrape_intraday",
-    #     max_instances=1,  # never overlap
-    #     misfire_grace_time=120,
-    # )
+    #  OHLC — every 30min, Mon-Fri, 10:00-14:30 GST
+    scheduler.add_job(
+        ohlc_job,
+        "cron",
+        day_of_week="mon-fri",
+        hour="10-14",
+        minute="*/30",
+        id="ohlc_intraday",
+        max_instances=1,
+        misfire_grace_time=120,
+    )
 
-    # End-of-day snapshot (15:10 GST — 10 min after close)
-    # scheduler.add_job(
-    #     scrape_job,
-    #     "cron",
-    #     day_of_week="sun-thu",
-    #     hour=15,
-    #     minute=10,
-    #     id="scrape_eod",
-    #     max_instances=1,
-    # )
+    #  Fundamentals — once daily at market open (10:05 GST)
+    scheduler.add_job(
+        fundamentals_job,
+        "cron",
+        day_of_week="mon-fri",
+        hour=10,
+        minute=5,
+        id="fundamentals_daily",
+        max_instances=1,
+        misfire_grace_time=300,
+    )
 
-    # scheduler.start()
-    logger.info("Worker started — scraping every 15min Sun-Thu 10:00-15:00 GST")
+    scheduler.start()
+    logger.info(
+        "Worker started\n"
+        "  OHLC:         Mon-Fri every 30min (10:00-14:30 GST)\n"
+        "  Fundamentals: Mon-Fri once at 10:05 GST\n"
+        "  Snapshot:     Mon-Fri once at 15:30 GST"
+    )
 
-    # Run once immediately on startup
-    await scrape_job()
+    # Run both immediately on startup
+    # await fundamentals_job()
+    # await ohlc_job()
 
-    # Keep alive
     try:
         while True:
             await asyncio.sleep(60)
     except (KeyboardInterrupt, SystemExit):
-        # scheduler.shutdown()
+        scheduler.shutdown()
         logger.info("Worker stopped.")
 
 

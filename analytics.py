@@ -104,13 +104,11 @@ class PortfolioAnalytics:
             return None
 
     #  OHLC resampling
-
     def _raw_bars(self, ticker_key: str) -> list[dict]:
         """Raw 15-min OHLC bars, sorted ascending."""
         return self._load_ohlc(ticker_key)  # already sorted in cache_manager
 
     #  Technical indicators (from daily closes)
-
     def _technicals(self, ticker_key: str) -> dict:
         bars = self._raw_bars(ticker_key)
         if len(bars) < 2:

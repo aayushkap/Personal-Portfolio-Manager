@@ -115,6 +115,7 @@ async def main():
     )
 
     scheduler.start()
+    await snapshot_job()
     logger.info(
         "Worker started\n"
         "  OHLC:         Mon-Fri every 30min (10:00-14:30 GST)\n"

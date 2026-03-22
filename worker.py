@@ -124,8 +124,8 @@ async def main():
     )
 
     # Run both immediately on startup
-    # await fundamentals_job()
-    # await ohlc_job()
+    await fundamentals_job()
+    await ohlc_job()
 
     try:
         while True:
@@ -135,5 +135,5 @@ async def main():
         logger.info("Worker stopped.")
 
 
-if __name__ == "__main__":
-    asyncio.run(main())
+# if __name__ == "__main__":
+#     asyncio.run(main())

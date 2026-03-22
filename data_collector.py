@@ -88,6 +88,7 @@ class StockAnalysisScraper:
         for attempt in range(self.max_retries):
             try:
                 await page.goto(url, wait_until=wait_for, timeout=self.timeout)
+                # await page.screenshot(f"{url}.png")
                 await self._jitter(1.0, 2)
                 return
             except Exception as exc:

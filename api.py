@@ -19,7 +19,7 @@ class Settings(BaseSettings):
 
     APP_NAME: str = "Analytics API"
     HOST: str = "0.0.0.0"
-    PORT: int = 8080
+    PORT: int = 90
     ALLOWED_ORIGINS: list[str] = ["*"]
     ANALYTICS_FILE: str = "analytics_output.json"
 

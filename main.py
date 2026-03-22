@@ -112,7 +112,7 @@ class PortfolioManager:
             cache.save_purchases(ticker_key, purchase_list)
 
         #  Scrape
-        semaphore = asyncio.Semaphore(2)
+        semaphore = asyncio.Semaphore(1)
 
         async def scrape_with_limit(ticker):
             async with semaphore:

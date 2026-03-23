@@ -741,14 +741,14 @@ class PortfolioAnalytics:
         }
 
 
-# if __name__ == "__main__":
-#     results = PortfolioAnalytics().run()
-#     with open("analytics_output.json", "w") as f:
-#         json.dump(results, f, indent=2, default=str)
-#     ret = results["summary"]["returns"]
-#     print(
-#         f"\nValue:        AED {ret['total_market_value_aed']:>10,.2f}"
-#         f"\nPrice Return: AED {ret['price_return_aed']:>+10,.2f}  ({ret['price_return_pct']:+.2f}%)"
-#         f"\nDividends:    AED {ret['dividends_received_aed']:>10,.2f}"
-#         f"\nTotal Return: AED {ret['total_return_aed']:>+10,.2f}  ({ret['total_return_pct']:+.2f}%)"
-#     )
+if __name__ == "__main__":
+    results = PortfolioAnalytics().run()
+    with open("analytics_output.json", "w") as f:
+        json.dump(results, f, indent=2, default=str)
+    ret = results["summary"]["returns"]
+    print(
+        f"\nValue:        AED {ret['total_market_value_aed']:>10,.2f}"
+        f"\nPrice Return: AED {ret['price_return_aed']:>+10,.2f}  ({ret['price_return_pct']:+.2f}%)"
+        f"\nDividends:    AED {ret['dividends_received_aed']:>10,.2f}"
+        f"\nTotal Return: AED {ret['total_return_aed']:>+10,.2f}  ({ret['total_return_pct']:+.2f}%)"
+    )

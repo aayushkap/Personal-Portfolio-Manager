@@ -41,6 +41,7 @@ async def ohlc_job():
                 logger.info(f"  {ticker_key} +{stat.get('appended', 0)} bars")
 
                 await snapshot_job()
+
             except Exception:
                 logger.exception(f"  OHLC failed: {ticker}")
 
@@ -80,6 +81,8 @@ async def snapshot_job():
     try:
         analytics = PortfolioAnalytics()
         summary = analytics.run()
+        with open("analytics_output.json", "w") as f:
+            json.dump(summary, f, indent=2, default=str)
 
         logger.info(f"  Snapshot saved. Analytics done.")
 

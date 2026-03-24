@@ -638,6 +638,8 @@ class PortfolioAnalytics:
     def _chart_ohlc(self, ticker_key: str) -> dict:
         bars = self._raw_bars(ticker_key)
         fund = self._load_fund(ticker_key)
+        if not fund:
+            return
 
         purchases = fund.get("purchases") or []
         purchase_dates = [

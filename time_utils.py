@@ -2,6 +2,7 @@ from datetime import datetime, date
 from zoneinfo import ZoneInfo
 
 DUBAI_TZ = ZoneInfo("Asia/Dubai")
+UTC_TZ = ZoneInfo("UTC")
 
 
 def dubai_now() -> datetime:
@@ -14,3 +15,13 @@ def dubai_today() -> date:
 
 def dubai_now_iso() -> str:
     return dubai_now().isoformat()
+
+
+def to_dubai(dt: datetime, assume_tz=UTC_TZ) -> datetime:
+    """
+    Convert datetime to Asia/Dubai.
+    If naive, assume `assume_tz` first.
+    """
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=assume_tz)
+    return dt.astimezone(DUBAI_TZ)

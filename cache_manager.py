@@ -2,11 +2,14 @@
 
 import json
 import os
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
-
+from time_utils import dubai_now_iso, DUBAI_TZ, UTC_TZ, to_dubai
+from datetime import timezone, datetime
+from zoneinfo import ZoneInfo
 
 CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache")
+
+DUBAI_TZ = ZoneInfo("Asia/Dubai")
 
 
 class CacheManager:
@@ -48,26 +51,44 @@ class CacheManager:
     def _normalise_ts(raw: Any) -> Optional[str]:
         if raw is None:
             return None
+
         try:
-            # pandas Timestamp or datetime object
-            if hasattr(raw, "strftime"):
-                if hasattr(raw, "tzinfo") and raw.tzinfo is not None:
-                    raw = raw.astimezone(timezone.utc).replace(tzinfo=None)
-                return raw.strftime("%Y-%m-%dT%H:%M")
+            # datetime / pandas Timestamp
+            if hasattr(raw, "to_pydatetime"):
+                raw = raw.to_pydatetime()
+
+            if isinstance(raw, datetime):
+                dt = raw
+                if dt.tzinfo is None:
+                    # IMPORTANT: choose the correct assumption for naive inputs.
+                    # If your source is UTC-like, this is correct.
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt.astimezone(DUBAI_TZ).strftime("%Y-%m-%dT%H:%M:%S%z")
 
             # Epoch int/float
             if isinstance(raw, (int, float)):
                 ts = raw / 1000 if raw > 32503680000 else raw
-                return datetime.utcfromtimestamp(ts).strftime("%Y-%m-%dT%H:%M")
+                dt = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(DUBAI_TZ)
+                return dt.strftime("%Y-%m-%dT%H:%M:%S%z")
 
+            # String input
             if isinstance(raw, str):
-                raw = raw.strip()
+                s = raw.strip()
 
-                # Strip timezone suffix (+04:00, +00:00, Z) before parsing
-                import re
+                # Handle Z explicitly
+                if s.endswith("Z"):
+                    s = s[:-1] + "+00:00"
 
-                raw_clean = re.sub(r"([+-]\d{2}:\d{2}|Z)$", "", raw).strip()
+                # Try ISO first
+                try:
+                    dt = datetime.fromisoformat(s)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    return dt.astimezone(DUBAI_TZ).strftime("%Y-%m-%dT%H:%M:%S%z")
+                except ValueError:
+                    pass
 
+                # Fallback formats for naive strings
                 for fmt in (
                     "%Y-%m-%dT%H:%M:%S",
                     "%Y-%m-%dT%H:%M",
@@ -76,14 +97,14 @@ class CacheManager:
                     "%Y-%m-%d",
                 ):
                     try:
-                        return datetime.strptime(raw_clean, fmt).strftime(
-                            "%Y-%m-%dT%H:%M"
-                        )
+                        dt = datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
+                        return dt.astimezone(DUBAI_TZ).strftime("%Y-%m-%dT%H:%M:%S%z")
                     except ValueError:
                         continue
 
         except Exception:
             pass
+
         return None
 
     #  Error detection
@@ -200,7 +221,7 @@ class CacheManager:
         )
         payload = {**existing}  # start with everything (preserves purchases)
         payload.update({k: data[k] for k in scrape_keys if k in data})
-        payload["last_updated"] = data.get("scraped_at", datetime.utcnow().isoformat())
+        payload["last_updated"] = data.get("scraped_at", dubai_now_iso())
 
         with open(path, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2, ensure_ascii=False)

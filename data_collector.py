@@ -6,13 +6,14 @@ Returns all data as a single nested dictionary.
 import asyncio
 import random
 import re
-from datetime import datetime
 from typing import Dict, List, Any, Optional
 from dateutil import parser
 
 from playwright.async_api import async_playwright, Browser, Page, BrowserContext
 from playwright_stealth import stealth_async
 from tvDatafeed import TvDatafeed, Interval
+from time_utils import dubai_now_iso, DUBAI_TZ, UTC_TZ, to_dubai
+import pandas as pd
 
 
 class StockAnalysisScraper:
@@ -146,7 +147,7 @@ class StockAnalysisScraper:
             "symbol": symbol,
             "exchange": exchange.upper(),
             "url": url,
-            "scraped_at": datetime.utcnow().isoformat(),
+            "scraped_at": dubai_now_iso(),
         }
 
         # Price and change
@@ -232,7 +233,7 @@ class StockAnalysisScraper:
             "symbol": symbol,
             "exchange": exchange.upper(),
             "url": url,
-            "scraped_at": datetime.utcnow().isoformat(),
+            "scraped_at": dubai_now_iso(),
             "headers": headers,
             "rows": rows,
         }
@@ -290,7 +291,7 @@ class StockAnalysisScraper:
             "symbol": symbol,
             "exchange": exchange.upper(),
             "url": url,
-            "scraped_at": datetime.utcnow().isoformat(),
+            "scraped_at": dubai_now_iso(),
             "headers": headers,
             "rows": rows,
         }
@@ -319,7 +320,7 @@ class StockAnalysisScraper:
             "symbol": symbol,
             "exchange": exchange.upper(),
             "url": url,
-            "scraped_at": datetime.utcnow().isoformat(),
+            "scraped_at": dubai_now_iso(),
             "sections": {},
         }
 
@@ -435,7 +436,7 @@ class StockAnalysisScraper:
             "symbol": symbol,
             "exchange": exchange.upper(),
             "url": url,
-            "scraped_at": datetime.utcnow().isoformat(),
+            "scraped_at": dubai_now_iso(),
             "headers": headers,
             "rows": rows,
             "return_metrics_rows": return_rows,
@@ -466,7 +467,7 @@ class StockAnalysisScraper:
             lambda route: route.abort(),
         )
 
-        result = {"ticker": key, "scraped_at": datetime.utcnow().isoformat()}
+        result = {"ticker": key, "scraped_at": dubai_now_iso()}
 
         #  Each section is independent — one failure never blocks the others
         sections = [
@@ -509,7 +510,11 @@ class StockAnalysisScraper:
         return result
 
     async def get_ohlc(
-        self, exchange: str, symbol: str, interval=Interval.in_15_minute, bars=500
+        self,
+        exchange: str,
+        symbol: str,
+        interval=Interval.in_15_minute,
+        bars=500,
     ):
         tv = TvDatafeed()
         df = tv.get_hist(
@@ -518,9 +523,25 @@ class StockAnalysisScraper:
             interval=interval,
             n_bars=bars,
         )
+
+        if df is None or df.empty:
+            return []
+
         df = df.reset_index()
         df = df.rename(columns={"index": "datetime"})
-        df["datetime"] = df["datetime"].astype(str)
+
+        dt_series = pd.to_datetime(df["datetime"], errors="coerce")
+
+        # tvDatafeed timestamps often come back naive; if so, assume UTC
+        if dt_series.dt.tz is None:
+            dt_series = dt_series.dt.tz_localize("UTC")
+        df["datetime"] = dt_series.dt.tz_convert("Asia/Dubai")
+
+        # Store both machine and formatted timestamps
+        df["datetime"] = df["datetime"].dt.strftime("%Y-%m-%dT%H:%M:%S%z")
+        df["datetime_display"] = pd.to_datetime(
+            df["datetime"], format="%Y-%m-%dT%H:%M:%S%z"
+        ).dt.strftime("%Y-%m-%d %H:%M:%S Asia/Dubai")
 
         return df.to_dict(orient="records")
 

@@ -114,7 +114,6 @@ async def main():
     )
 
     scheduler.start()
-    await snapshot_job()
 
     logger.info(
         "Worker started\n"
@@ -123,7 +122,9 @@ async def main():
         "  Fundamentals: Mon-Fri once at 00:05 Asia/Dubai"
     )
 
+    await fundamentals_job()
     await ohlc_job()
+    await snapshot_job()
 
     try:
         while True:

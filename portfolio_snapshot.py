@@ -6,6 +6,8 @@ from datetime import datetime, date
 from typing import Optional
 import json
 
+from time_utils import dubai_today
+
 SNAPSHOT_FILE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "cache", "portfolio_snapshots.csv"
 )
@@ -65,7 +67,7 @@ class PortfolioSnapshotter:
         Call this once per day after fetching current prices.
         cash_flow_today = AED value of NEW purchases made today (0 if no new buys).
         """
-        today = snapshot_date or date.today()
+        today = snapshot_date or dubai_today()
         today_str = today.isoformat()
 
         # Get all rows and find the previous record (excluding today if it exists)

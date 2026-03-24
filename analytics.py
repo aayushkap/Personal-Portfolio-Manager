@@ -13,6 +13,7 @@ import io
 from PIL import Image
 from colorthief import ColorThief
 from typing import Optional
+from time_utils import dubai_today, dubai_now_iso
 
 
 def brand_color_from_url(url: str) -> Optional[str]:
@@ -222,8 +223,6 @@ class PortfolioAnalytics:
                 )
         return sorted(result, key=lambda x: x["ex_date"])
 
-    # analytics.py — _dividends_received()
-
     def _dividends_received(self, ticker_key: str) -> dict:
         fund = self._load_fund(ticker_key)
         if not fund:
@@ -233,10 +232,10 @@ class PortfolioAnalytics:
         div_history = self._historical_dividends(ticker_key)
         events = []
         total = 0.0
-        today = date.today()
+        today = dubai_today()
 
         for div in div_history:
-            # ── Only count dividends whose ex-date has strictly passed ──────
+            # Only count dividends whose ex-date has strictly passed
             # Ex-date = today means you're entitled but cash hasn't arrived yet
             if div["ex_date"] >= today:
                 continue
@@ -262,10 +261,7 @@ class PortfolioAnalytics:
 
         return {"total_aed": round(total, 2), "events": events}
 
-    #
     # POSITION-LEVEL ANALYTICS
-    #
-
     def ticker_summary(self, ticker_key: str) -> dict:
         fund = self._load_fund(ticker_key)
         if not fund:
@@ -294,7 +290,7 @@ class PortfolioAnalytics:
         ]
         first_purchase = min(purchase_dates).isoformat() if purchase_dates else None
         days_held = (
-            (date.today() - min(purchase_dates)).days if purchase_dates else None
+            (dubai_today() - min(purchase_dates)).days if purchase_dates else None
         )
 
         # Price metrics
@@ -323,7 +319,7 @@ class PortfolioAnalytics:
         # Yield on cost
         div_history = self._historical_dividends(ticker_key)
         # Forward: annualize last 12 months of dividends per share
-        one_year_ago = date.today() - timedelta(days=365)
+        one_year_ago = dubai_today() - timedelta(days=365)
         trailing_dps = sum(
             d["amount_per_share"] for d in div_history if d["ex_date"] >= one_year_ago
         )
@@ -506,7 +502,7 @@ class PortfolioAnalytics:
         )
 
         return {
-            "as_of": datetime.utcnow().isoformat(),
+            "as_of": dubai_now_iso(),
             #  Returns
             "returns": {
                 "total_market_value_aed": round(total_value, 2),
@@ -563,13 +559,15 @@ class PortfolioAnalytics:
             return round((v2 - v1) / v1 * 100, 2) if v1 else None
 
         def _row_ago(n):
-            target = (date.today() - timedelta(days=n)).isoformat()
+            target = (dubai_today() - timedelta(days=n)).isoformat()
             candidates = [r for r in rows if r["date"] <= target]
             return candidates[-1] if candidates else None
 
         latest = rows[-1]
         dod, wow, mom, q3, h6 = (_row_ago(n) for n in (1, 7, 30, 90, 180))
-        ytd = next((r for r in rows if r["date"] >= f"{date.today().year}-01-01"), None)
+        ytd = next(
+            (r for r in rows if r["date"] >= f"{dubai_today().year}-01-01"), None
+        )
 
         return {
             "dod_pct": _pct(latest, dod) if dod else None,
@@ -580,7 +578,7 @@ class PortfolioAnalytics:
             "ytd_pct": _pct(latest, ytd) if ytd else None,
             "twr_pct": float(latest["twr_pct"]),
             "since_inception": {
-                "days": (date.today() - date.fromisoformat(rows[0]["date"])).days,
+                "days": (dubai_today() - date.fromisoformat(rows[0]["date"])).days,
                 "price_pct": _pct(latest, rows[0]),
                 "twr_pct": float(latest["twr_pct"]),
             },

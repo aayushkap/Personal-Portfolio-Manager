@@ -1,17 +1,14 @@
-# worker.py
-
 import asyncio
 import logging
 import json
-from datetime import datetime
 from zoneinfo import ZoneInfo
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from main import PortfolioManager
 from analytics import PortfolioAnalytics
-from portfolio_snapshot import PortfolioSnapshotter
 from cache_manager import CacheManager
 from data_collector import StockAnalysisScraper
+from time_utils import DUBAI_TZ, dubai_now
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
@@ -20,8 +17,8 @@ logger = logging.getLogger(__name__)
 
 
 async def ohlc_job():
-    """Lightweight — fetches OHLC only. Runs every 30min during market hours."""
-    logger.info(" OHLC job starting ")
+    """Lightweight — fetches OHLC only. Runs every 30 min during Dubai market window."""
+    logger.info("OHLC job starting | now=%s", dubai_now().isoformat())
     try:
         manager = PortfolioManager()
         tickers = manager.get_tickers()
@@ -29,7 +26,6 @@ async def ohlc_job():
 
         for ticker in tickers:
             try:
-                # StockAnalysisScraper expects ticker dict, get_ohlc is on the instance
                 scraper = StockAnalysisScraper(ticker=ticker)
                 ohlc = await scraper.get_ohlc(
                     exchange=ticker["exchange"],
@@ -38,12 +34,13 @@ async def ohlc_job():
                 )
                 ticker_key = f"{ticker['exchange'].upper()}:{ticker['symbol']}"
                 stat = cache.append_ohlc(ticker_key, ohlc)
-                logger.info(f"  {ticker_key} +{stat.get('appended', 0)} bars")
-
-                await snapshot_job()
+                logger.info("%s +%s bars", ticker_key, stat.get("appended", 0))
 
             except Exception:
-                logger.exception(f"  OHLC failed: {ticker}")
+                logger.exception("OHLC failed: %s", ticker)
+
+        # Run snapshot once after all tickers finish
+        await snapshot_job()
 
     except Exception:
         logger.exception("OHLC job failed")
@@ -51,22 +48,21 @@ async def ohlc_job():
 
 async def fundamentals_job():
     """Heavy — full scrape (overview, financials, dividends, etc). Runs once daily."""
-    logger.info(" Fundamentals job starting ")
+    logger.info("Fundamentals job starting | now=%s", dubai_now().isoformat())
     try:
         manager = PortfolioManager()
-        await manager.run()  # full scrape, saves to cache
+        await manager.run()
 
-        # Write analytics JSON + record snapshot
         results = PortfolioAnalytics().run()
-        with open("analytics_output.json", "w") as f:
+        with open("analytics_output.json", "w", encoding="utf-8") as f:
             json.dump(results, f, indent=2, default=str)
 
         ret = results["summary"]["returns"]
         logger.info(
-            f" Fundamentals done | "
-            f"Value: AED {ret['total_market_value_aed']:,.2f} | "
-            f"P&L: {ret['price_return_pct']:+.2f}% | "
-            f"Total Return: {ret['total_return_pct']:+.2f}% "
+            "Fundamentals done | Value: AED %,.2f | P&L: %+,.2f%% | Total Return: %+,.2f%%",
+            ret["total_market_value_aed"],
+            ret["price_return_pct"],
+            ret["total_return_pct"],
         )
 
         await snapshot_job()
@@ -76,24 +72,24 @@ async def fundamentals_job():
 
 
 async def snapshot_job():
-    """Records end-of-day portfolio snapshot to CSV."""
-    logger.info(" Snapshot job ")
+    """Records portfolio snapshot using Dubai-local date."""
+    logger.info("Snapshot job | now=%s", dubai_now().isoformat())
     try:
         analytics = PortfolioAnalytics()
         summary = analytics.run()
-        with open("analytics_output.json", "w") as f:
+        with open("analytics_output.json", "w", encoding="utf-8") as f:
             json.dump(summary, f, indent=2, default=str)
 
-        logger.info(f"  Snapshot saved. Analytics done.")
+        logger.info("Snapshot saved. Analytics done.")
 
     except Exception:
         logger.exception("Snapshot job failed")
 
 
 async def main():
-    scheduler = AsyncIOScheduler(timezone=ZoneInfo("Asia/Dubai"))
+    scheduler = AsyncIOScheduler(timezone=DUBAI_TZ)
 
-    #  OHLC — every 30min, Mon-Fri, 10:00-14:30 GST
+    # OHLC — every 30 min, Mon-Fri, 10:00–16:30 Asia/Dubai
     scheduler.add_job(
         ohlc_job,
         "cron",
@@ -105,12 +101,12 @@ async def main():
         misfire_grace_time=120,
     )
 
-    #  Fundamentals — once daily at night
+    # Fundamentals — once daily at 00:05 Asia/Dubai
     scheduler.add_job(
         fundamentals_job,
         "cron",
         day_of_week="mon-fri",
-        hour=00,
+        hour=0,
         minute=5,
         id="fundamentals_daily",
         max_instances=1,
@@ -119,15 +115,14 @@ async def main():
 
     scheduler.start()
     await snapshot_job()
+
     logger.info(
         "Worker started\n"
-        "  OHLC:         Mon-Fri every 30min (10:00-14:30 GST)\n"
-        "  Fundamentals: Mon-Fri once at 10:05 GST\n"
-        "  Snapshot:     Mon-Fri once at 15:30 GST"
+        "  Timezone:     Asia/Dubai\n"
+        "  OHLC:         Mon-Fri every 30 min (10:00–16:30 Asia/Dubai)\n"
+        "  Fundamentals: Mon-Fri once at 00:05 Asia/Dubai"
     )
 
-    # Run both immediately on startup
-    # await fundamentals_job()
     await ohlc_job()
 
     try:
@@ -136,7 +131,3 @@ async def main():
     except (KeyboardInterrupt, SystemExit):
         scheduler.shutdown()
         logger.info("Worker stopped.")
-
-
-# if __name__ == "__main__":
-#     asyncio.run(main())

@@ -471,7 +471,7 @@ class StockAnalysisScraper:
 
         #  Each section is independent — one failure never blocks the others
         sections = [
-            ("ohlc", lambda: self.get_ohlc(exchange, symbol)),
+            # ("ohlc", lambda: self.get_ohlc(exchange, symbol)),
             ("overview", lambda: self._scrape_overview(page, exchange, symbol)),
             ("financials", lambda: self._scrape_financials(page, exchange, symbol)),
             ("dividends", lambda: self._scrape_dividends(page, exchange, symbol)),

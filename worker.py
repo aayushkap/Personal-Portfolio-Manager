@@ -57,14 +57,6 @@ async def fundamentals_job():
         with open("analytics_output.json", "w", encoding="utf-8") as f:
             json.dump(results, f, indent=2, default=str)
 
-        ret = results["summary"]["returns"]
-        logger.info(
-            "Fundamentals done | Value: AED %,.2f | P&L: %+,.2f%% | Total Return: %+,.2f%%",
-            ret["total_market_value_aed"],
-            ret["price_return_pct"],
-            ret["total_return_pct"],
-        )
-
         await snapshot_job()
 
     except Exception:

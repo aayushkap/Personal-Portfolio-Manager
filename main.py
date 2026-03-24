@@ -78,7 +78,9 @@ class PortfolioManager:
             if ":" in symbol and symbol not in seen:
                 seen.add(symbol)
                 exchange, sym = symbol.split(":", 1)
-                tickers.append({"exchange": exchange, "symbol": sym})
+                tickers.append(
+                    {"exchange": exchange.upper().strip(), "symbol": sym.strip()}
+                )
         return tickers
 
     async def run(self):

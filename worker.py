@@ -98,19 +98,19 @@ async def main():
         ohlc_job,
         "cron",
         day_of_week="mon-fri",
-        hour="10-14",
+        hour="10-16",
         minute="*/30",
         id="ohlc_intraday",
         max_instances=1,
         misfire_grace_time=120,
     )
 
-    #  Fundamentals — once daily at market open (10:05 GST)
+    #  Fundamentals — once daily at night
     scheduler.add_job(
         fundamentals_job,
         "cron",
         day_of_week="mon-fri",
-        hour=10,
+        hour=00,
         minute=5,
         id="fundamentals_daily",
         max_instances=1,
@@ -127,7 +127,7 @@ async def main():
     )
 
     # Run both immediately on startup
-    await fundamentals_job()
+    # await fundamentals_job()
     await ohlc_job()
 
     try:

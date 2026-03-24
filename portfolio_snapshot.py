@@ -68,14 +68,18 @@ class PortfolioSnapshotter:
         today = snapshot_date or date.today()
         today_str = today.isoformat()
 
-        # Don't double-record the same day
-        last = self._last_row()
-        if last and last["date"] == today_str:
-            print(f"  [snapshot] Already recorded for {today_str}, skipping.")
-            return last
+        # Get all rows and find the previous record (excluding today if it exists)
+        all_rows = self._load_all()
+        prev_row = None
+        for row in reversed(all_rows):
+            if row["date"] != today_str:
+                prev_row = row
+                break
 
-        prev_value = float(last["total_market_value_aed"]) if last else market_value
-        prev_factor = float(last["twr_factor"]) if last else 1.0
+        prev_value = (
+            float(prev_row["total_market_value_aed"]) if prev_row else market_value
+        )
+        prev_factor = float(prev_row["twr_factor"]) if prev_row else 1.0
 
         # TWR sub-period: neutralise today's cash injection in denominator
         # HP = (end - (start + cashflow)) / (start + cashflow)
@@ -101,8 +105,12 @@ class PortfolioSnapshotter:
             "twr_pct": round(twr_pct, 4),
         }
 
-        with open(self.path, "a", newline="", encoding="utf-8") as f:
+        # Remove any existing record for today and write all rows back
+        filtered_rows = [r for r in all_rows if r["date"] != today_str]
+        with open(self.path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=COLUMNS)
+            writer.writeheader()
+            writer.writerows(filtered_rows)
             writer.writerow(row)
 
         print(

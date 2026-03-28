@@ -1,13 +1,12 @@
 import asyncio
 import logging
 import json
-from zoneinfo import ZoneInfo
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from main import PortfolioManager
-from analytics import PortfolioAnalytics
-from cache_manager import CacheManager
-from data_collector import StockAnalysisScraper
+from app.main import PortfolioManager
+from app.analytics import PortfolioAnalytics
+from app.data.cache_manager import CacheManager
+from data.data_collector import StockAnalysisScraper
 from time_utils import DUBAI_TZ, dubai_now
 
 logging.basicConfig(

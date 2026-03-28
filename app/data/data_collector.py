@@ -6,13 +6,13 @@ Returns all data as a single nested dictionary.
 import asyncio
 import random
 import re
-from typing import Dict, List, Any, Optional
+from typing import Dict, Any
 from dateutil import parser
 import logging
 from playwright.async_api import async_playwright, Browser, Page, BrowserContext
 from playwright_stealth import stealth_async
 from tvDatafeed import TvDatafeed, Interval
-from time_utils import dubai_now_iso, DUBAI_TZ, UTC_TZ, to_dubai
+from time_utils import dubai_now_iso
 import pandas as pd
 
 logging.basicConfig(

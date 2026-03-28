@@ -6,13 +6,12 @@ import math
 from datetime import datetime, date, timedelta
 from typing import Any, Optional
 from collections import defaultdict
-from cache_manager import CacheManager
-from portfolio_snapshot import PortfolioSnapshotter
+from app.data.cache_manager import CacheManager
+from data.portfolio_snapshot import PortfolioSnapshotter
 import httpx
 import io
 from PIL import Image
 from colorthief import ColorThief
-from typing import Optional
 from time_utils import dubai_today, dubai_now_iso
 
 
@@ -58,7 +57,6 @@ def brand_color_from_url(url: str) -> Optional[str]:
 
 
 class PortfolioAnalytics:
-
     def __init__(self):
         self.cache = CacheManager()
         self.snapshotter = PortfolioSnapshotter()
@@ -519,7 +517,9 @@ class PortfolioAnalytics:
                 "concentration_label": (
                     "high"
                     if hhi and hhi > 0.25
-                    else "moderate" if hhi and hhi > 0.15 else "diversified"
+                    else "moderate"
+                    if hhi and hhi > 0.15
+                    else "diversified"
                 ),
                 "weighted_volatility_pct": round(w_vol, 2),
                 "largest_position": largest["ticker"] if largest else None,

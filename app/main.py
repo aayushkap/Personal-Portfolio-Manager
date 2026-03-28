@@ -1,10 +1,9 @@
 import gspread
 import os
-from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
-from data_collector import StockAnalysisScraper
-from cache_manager import CacheManager
+from data.data_collector import StockAnalysisScraper
+from app.data.cache_manager import CacheManager
 from collections import defaultdict
 
 import asyncio
@@ -19,7 +18,6 @@ SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
 
 
 class PortfolioManager:
-
     def __init__(self):
         pass
 

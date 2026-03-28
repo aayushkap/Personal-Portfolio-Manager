@@ -1,0 +1,22 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+      - id: check-ast
+      - id: check-merge-conflict
+      - id: debug-statements
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    # Ruff version.
+    rev: v0.9.4 # Use the latest version available
+    hooks:
+      # 1. Run the Linter (fixes imports, unused vars, upgrades syntax)
+      - id: ruff
+        args: [--fix] # Enables default rules (E, F) + any config in pyproject.toml
+
+      # 2. Run the Formatter (replaces Black/Isort, fixes layout)
+      - id: ruff-format

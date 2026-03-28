@@ -10,7 +10,6 @@ from contextlib import asynccontextmanager
 from worker import main as worker_main
 
 
-from pydantic_settings import BaseSettings
 from pydantic import ConfigDict
 
 

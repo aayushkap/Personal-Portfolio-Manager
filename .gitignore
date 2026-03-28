@@ -223,5 +223,6 @@ __marimo__/
 
 /*.pub
 /*.key
+/access
 
 commands.txt

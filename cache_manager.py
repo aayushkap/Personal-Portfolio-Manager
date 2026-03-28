@@ -74,10 +74,13 @@ class CacheManager:
             # String input
             if isinstance(raw, str):
                 s = raw.strip()
-
-                # Handle Z explicitly
                 if s.endswith("Z"):
                     s = s[:-1] + "+00:00"
+
+                # Add: normalize +HHMM → +HH:MM for Python ≤ 3.10
+                import re
+
+                s = re.sub(r"([+-])(\d{2})(\d{2})$", r"\1\2:\3", s)
 
                 # Try ISO first
                 try:

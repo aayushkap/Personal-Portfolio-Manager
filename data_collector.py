@@ -8,12 +8,17 @@ import random
 import re
 from typing import Dict, List, Any, Optional
 from dateutil import parser
-
+import logging
 from playwright.async_api import async_playwright, Browser, Page, BrowserContext
 from playwright_stealth import stealth_async
 from tvDatafeed import TvDatafeed, Interval
 from time_utils import dubai_now_iso, DUBAI_TZ, UTC_TZ, to_dubai
 import pandas as pd
+
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
+)
+logger = logging.getLogger(__name__)
 
 
 class StockAnalysisScraper:
@@ -509,41 +514,91 @@ class StockAnalysisScraper:
 
         return result
 
+    @staticmethod
     async def get_ohlc(
-        self,
         exchange: str,
         symbol: str,
         interval=Interval.in_15_minute,
         bars=500,
+        max_retries: int = 4,
+        base_delay: float = 3.0,
     ):
-        tv = TvDatafeed()
-        df = tv.get_hist(
-            symbol=symbol,
-            exchange=exchange,
-            interval=interval,
-            n_bars=bars,
-        )
+        loop = asyncio.get_event_loop()
 
-        if df is None or df.empty:
-            return []
+        for attempt in range(1, max_retries + 1):
+            try:
+                tv = TvDatafeed()
+                df = await loop.run_in_executor(
+                    None,
+                    lambda: tv.get_hist(
+                        symbol=symbol,
+                        exchange=exchange,
+                        interval=interval,
+                        n_bars=bars,
+                    ),
+                )
 
-        df = df.reset_index()
-        df = df.rename(columns={"index": "datetime"})
+                if df is not None and not df.empty:
+                    df = df.reset_index()
+                    df = df.rename(columns={"index": "datetime"})
+                    dt_series = pd.to_datetime(df["datetime"], errors="coerce")
+                    if dt_series.dt.tz is None:
+                        dt_series = dt_series.dt.tz_localize("UTC")
+                    df["datetime"] = dt_series.dt.tz_convert("Asia/Dubai")
+                    df["datetime"] = df["datetime"].apply(lambda ts: ts.isoformat())
+                    df["datetime_display"] = pd.to_datetime(
+                        df["datetime"], format="%Y-%m-%dT%H:%M:%S%z"
+                    ).dt.strftime("%Y-%m-%d %H:%M:%S Asia/Dubai")
+                    logger.info(
+                        "%s:%s attempt %d — got %d rows",
+                        exchange,
+                        symbol,
+                        attempt,
+                        len(df),
+                    )
+                    return df.to_dict(orient="records")
 
-        dt_series = pd.to_datetime(df["datetime"], errors="coerce")
+                # Empty/None = connection was silently dropped by tvDatafeed — always retry
+                if attempt < max_retries:
+                    delay = base_delay * (2 ** (attempt - 1)) + random.uniform(0, 1.5)
+                    logger.warning(
+                        "%s:%s attempt %d — empty/None df, retrying in %.1fs",
+                        exchange,
+                        symbol,
+                        attempt,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    logger.error(
+                        "%s:%s all %d attempts returned empty.",
+                        exchange,
+                        symbol,
+                        max_retries,
+                    )
 
-        # tvDatafeed timestamps often come back naive; if so, assume UTC
-        if dt_series.dt.tz is None:
-            dt_series = dt_series.dt.tz_localize("UTC")
-        df["datetime"] = dt_series.dt.tz_convert("Asia/Dubai")
+            except Exception as exc:
+                if attempt < max_retries:
+                    delay = base_delay * (2 ** (attempt - 1)) + random.uniform(0, 1.5)
+                    logger.warning(
+                        "%s:%s attempt %d raised %s — retrying in %.1fs",
+                        exchange,
+                        symbol,
+                        attempt,
+                        exc,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    logger.error(
+                        "%s:%s all %d attempts failed. Last: %s",
+                        exchange,
+                        symbol,
+                        max_retries,
+                        exc,
+                    )
 
-        # Store both machine and formatted timestamps
-        df["datetime"] = df["datetime"].dt.strftime("%Y-%m-%dT%H:%M:%S%z")
-        df["datetime_display"] = pd.to_datetime(
-            df["datetime"], format="%Y-%m-%dT%H:%M:%S%z"
-        ).dt.strftime("%Y-%m-%d %H:%M:%S Asia/Dubai")
-
-        return df.to_dict(orient="records")
+        return []
 
     # Public API
     async def scrape(self) -> Dict[str, Any]:

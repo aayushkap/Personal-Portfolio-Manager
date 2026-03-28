@@ -17,7 +17,6 @@ logger = logging.getLogger(__name__)
 
 
 async def ohlc_job():
-    """Lightweight — fetches OHLC only. Runs every 30 min during Dubai market window."""
     logger.info("OHLC job starting | now=%s", dubai_now().isoformat())
     try:
         manager = PortfolioManager()
@@ -26,8 +25,7 @@ async def ohlc_job():
 
         for ticker in tickers:
             try:
-                scraper = StockAnalysisScraper(ticker=ticker)
-                ohlc = await scraper.get_ohlc(
+                ohlc = await StockAnalysisScraper.get_ohlc(
                     exchange=ticker["exchange"],
                     symbol=ticker["symbol"],
                     bars=100,
@@ -39,7 +37,6 @@ async def ohlc_job():
             except Exception:
                 logger.exception("OHLC failed: %s", ticker)
 
-        # Run snapshot once after all tickers finish
         await snapshot_job()
 
     except Exception:
@@ -110,13 +107,12 @@ async def main():
     logger.info(
         "Worker started\n"
         "  Timezone:     Asia/Dubai\n"
-        "  OHLC:         Mon-Fri every 30 min (10:00–16:30 Asia/Dubai)\n"
+        "  OHLC:         Mon-Fri every 30 min (10:00-16:30 Asia/Dubai)\n"
         "  Fundamentals: Mon-Fri once at 00:05 Asia/Dubai"
     )
 
     await fundamentals_job()
     await ohlc_job()
-    await snapshot_job()
 
     try:
         while True:

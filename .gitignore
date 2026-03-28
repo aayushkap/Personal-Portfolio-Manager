@@ -226,3 +226,5 @@ __marimo__/
 /access
 
 commands.txt
+
+*.db

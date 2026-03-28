@@ -11,9 +11,7 @@ from dateutil import parser
 import logging
 from playwright.async_api import async_playwright, Browser, Page, BrowserContext
 from playwright_stealth import stealth_async
-from tvDatafeed import TvDatafeed, Interval
-from app.time_utils import dubai_now_iso
-import pandas as pd
+from app.utils import dubai_now_iso
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
@@ -44,18 +42,15 @@ class StockAnalysisScraper:
 
     def __init__(
         self,
-        ticker: Dict[str, str],
         headless: bool = True,
         timeout: int = 45000,
         max_retries: int = 3,
     ):
         """
-        :param tickers: List of dicts with keys 'exchange' and 'symbol' (e.g. {'exchange': 'dfm', 'symbol': 'DEWA'})
         :param headless: Whether to run browser in headless mode
         :param timeout: Navigation timeout in milliseconds
         :param max_retries: Number of retries for failed navigations
         """
-        self.ticker = ticker
         self.headless = headless
         self.timeout = timeout
         self.max_retries = max_retries
@@ -144,6 +139,8 @@ class StockAnalysisScraper:
         """Scrape the overview page (price, change, key stats)."""
         url = f"https://stockanalysis.com/quote/{exchange}/{symbol}/"
 
+        logger.info(f"Scraping overview for ticker: \t {exchange}:{symbol}")
+
         await self._safe_goto(page, url)
         await self._human_mouse_wander(page)
         await self._human_scroll(page)
@@ -201,6 +198,8 @@ class StockAnalysisScraper:
         """Scrape the financials table (income statement / balance sheet)."""
         url = f"https://stockanalysis.com/quote/{exchange}/{symbol}/financials/"
 
+        logger.info(f"Scraping financials for ticker: \t {exchange}:{symbol}")
+
         await self._safe_goto(page, url)
         await self._human_mouse_wander(page)
 
@@ -250,6 +249,8 @@ class StockAnalysisScraper:
     ) -> Dict[str, Any]:
         """Scrape the dividend history table."""
         url = f"https://stockanalysis.com/quote/{exchange}/{symbol}/dividend/"
+
+        logger.info(f"Scraping dividends for ticker: \t {exchange}:{symbol}")
 
         await self._safe_goto(page, url)
         await self._human_mouse_wander(page)
@@ -310,6 +311,8 @@ class StockAnalysisScraper:
         """Scrape the statistics page (detailed ratios and metrics)."""
         url = f"https://stockanalysis.com/quote/{exchange}/{symbol}/statistics/"
 
+        logger.info(f"Scraping statistics for ticker: \t {exchange}:{symbol}")
+
         await self._safe_goto(page, url)
         await self._human_mouse_wander(page)
 
@@ -354,21 +357,13 @@ class StockAnalysisScraper:
                     value = raw.strip() if raw.strip() and raw.strip() != disp else disp
 
                     if key:
-                        section_data[key] = {
-                            "display": disp,
-                            "raw": raw.strip() or disp,
-                        }
+                        section_data[key] = raw.strip() or disp
 
                 if section_data:
                     data["sections"][section_name] = section_data
 
             # Flat views
             data["all_stats"] = {
-                k: v["display"]
-                for section in data["sections"].values()
-                for k, v in section.items()
-            }
-            data["all_stats_raw"] = {
                 k: v["raw"]
                 for section in data["sections"].values()
                 for k, v in section.items()
@@ -393,6 +388,8 @@ class StockAnalysisScraper:
     ) -> Dict[str, Any]:
         """Scrape the financial ratios page (historical time series)."""
         url = f"https://stockanalysis.com/quote/{exchange}/{symbol}/financials/ratios/"
+
+        logger.info(f"Scraping ratios for ticker: \t {exchange}:{symbol}")
 
         await self._safe_goto(page, url)
         await self._human_mouse_wander(page)
@@ -476,7 +473,6 @@ class StockAnalysisScraper:
 
         #  Each section is independent — one failure never blocks the others
         sections = [
-            # ("ohlc", lambda: self.get_ohlc(exchange, symbol)),
             ("overview", lambda: self._scrape_overview(page, exchange, symbol)),
             ("financials", lambda: self._scrape_financials(page, exchange, symbol)),
             ("dividends", lambda: self._scrape_dividends(page, exchange, symbol)),
@@ -514,99 +510,11 @@ class StockAnalysisScraper:
 
         return result
 
-    @staticmethod
-    async def get_ohlc(
-        exchange: str,
-        symbol: str,
-        interval=Interval.in_15_minute,
-        bars=500,
-        max_retries: int = 4,
-        base_delay: float = 3.0,
-    ):
-        loop = asyncio.get_event_loop()
-
-        for attempt in range(1, max_retries + 1):
-            try:
-                tv = TvDatafeed()
-                df = await loop.run_in_executor(
-                    None,
-                    lambda: tv.get_hist(
-                        symbol=symbol,
-                        exchange=exchange,
-                        interval=interval,
-                        n_bars=bars,
-                    ),
-                )
-
-                if df is not None and not df.empty:
-                    df = df.reset_index()
-                    df = df.rename(columns={"index": "datetime"})
-                    dt_series = pd.to_datetime(df["datetime"], errors="coerce")
-                    if dt_series.dt.tz is None:
-                        dt_series = dt_series.dt.tz_localize("UTC")
-                    df["datetime"] = dt_series.dt.tz_convert("Asia/Dubai")
-                    df["datetime"] = df["datetime"].apply(lambda ts: ts.isoformat())
-                    df["datetime_display"] = pd.to_datetime(
-                        df["datetime"], format="%Y-%m-%dT%H:%M:%S%z"
-                    ).dt.strftime("%Y-%m-%d %H:%M:%S Asia/Dubai")
-                    logger.info(
-                        "%s:%s attempt %d — got %d rows",
-                        exchange,
-                        symbol,
-                        attempt,
-                        len(df),
-                    )
-                    return df.to_dict(orient="records")
-
-                # Empty/None = connection was silently dropped by tvDatafeed — always retry
-                if attempt < max_retries:
-                    delay = base_delay * (2 ** (attempt - 1)) + random.uniform(0, 1.5)
-                    logger.warning(
-                        "%s:%s attempt %d — empty/None df, retrying in %.1fs",
-                        exchange,
-                        symbol,
-                        attempt,
-                        delay,
-                    )
-                    await asyncio.sleep(delay)
-                else:
-                    logger.error(
-                        "%s:%s all %d attempts returned empty.",
-                        exchange,
-                        symbol,
-                        max_retries,
-                    )
-
-            except Exception as exc:
-                if attempt < max_retries:
-                    delay = base_delay * (2 ** (attempt - 1)) + random.uniform(0, 1.5)
-                    logger.warning(
-                        "%s:%s attempt %d raised %s — retrying in %.1fs",
-                        exchange,
-                        symbol,
-                        attempt,
-                        exc,
-                        delay,
-                    )
-                    await asyncio.sleep(delay)
-                else:
-                    logger.error(
-                        "%s:%s all %d attempts failed. Last: %s",
-                        exchange,
-                        symbol,
-                        max_retries,
-                        exc,
-                    )
-
-        return []
-
     # Public API
-    async def scrape(self) -> Dict[str, Any]:
+    async def scrape(self, ticker: dict) -> Dict[str, Any]:
         """
-        Scrape all configured tickers and return a dictionary with results.
-        The dictionary has ticker keys (e.g. 'DFM:DEWA') containing the scraped data.
+        Scrape tickers and return a dictionary with results. The dictionary has ticker keys (e.g. 'DFM:DEWA') containing the scraped data.
         """
-        all_results = {}
 
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(
@@ -623,28 +531,20 @@ class StockAnalysisScraper:
                 ],
             )
 
-            if self.ticker:
-                ticker_result = await self._scrape_ticker(browser, self.ticker)
-                key = ticker_result["ticker"]
-                all_results[key] = ticker_result
-
+            ticker_result = await self._scrape_ticker(browser, ticker)
             await browser.close()
 
-        return all_results
+        return ticker_result
 
 
-# Example usage
-# if __name__ == "__main__":
+async def main():
+    obj = StockAnalysisScraper()
+    res = await obj.scrape({"exchange": "DFM", "symbol": "EMAAR"})
+    import json
 
-#     async def main():
-#         tickers = [
-#             {"exchange": "dfm", "symbol": "DEWA"},
-#         ]
-#         scraper = StockAnalysisScraper(tickers, headless=True)
-#         data = await scraper.scrape_all()
-#         import json
+    with open("filename.json", "w") as f:
+        json.dump(res, f, indent=2)
 
-#         with open("filename.json", "w") as f:
-#             json.dump(data, f, indent=2)
 
-#     asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())

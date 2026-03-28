@@ -3,7 +3,7 @@
 import json
 import os
 from typing import Any, Dict, List, Optional
-from app.time_utils import dubai_now_iso, DUBAI_TZ
+from app.utils import dubai_now_iso, DUBAI_TZ
 from datetime import timezone, datetime
 from zoneinfo import ZoneInfo
 

@@ -2,16 +2,16 @@ import gspread
 import os
 from dotenv import load_dotenv
 
-from data.data_collector import StockAnalysisScraper
+from app.data.data_collector import StockAnalysisScraper
 from app.data.cache_manager import CacheManager
 from collections import defaultdict
-
+from pathlib import Path
 import asyncio
 
 load_dotenv()
 
 SERVICE_ACCOUNT_FILE = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)),
+    os.path.dirname(Path(__file__).resolve().parent),
     os.getenv("GOOGLE_SHEETS_SERVICE_ACCOUNT_FILE"),
 )
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")

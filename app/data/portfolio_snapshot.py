@@ -5,7 +5,7 @@ import os
 from datetime import date
 from typing import Optional
 
-from time_utils import dubai_today
+from app.time_utils import dubai_today
 
 SNAPSHOT_FILE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "cache", "portfolio_snapshots.csv"

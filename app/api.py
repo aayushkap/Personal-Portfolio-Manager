@@ -7,10 +7,13 @@ import asyncio
 from pathlib import Path
 from contextlib import asynccontextmanager
 
-from worker import main as worker_main
-
+from app.worker import main as worker_main
+import os
+from dotenv import load_dotenv
 
 from pydantic import ConfigDict
+
+load_dotenv()
 
 
 class Settings(BaseSettings):
@@ -49,7 +52,10 @@ async def root():
 
 
 @app.get("/analytics")
-async def get_analytics():
+async def get_analytics(password: str):
+    if password.lower().strip() != os.getenv("ANALYTICS_PASSWORD"):
+        return HTTPException(status_code=401, detail="Password is incorrect")
+
     file_path = Path(settings.ANALYTICS_FILE)
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Worker still initializing...")
@@ -63,4 +69,4 @@ async def get_analytics():
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("api:app", host=settings.HOST, port=settings.PORT, reload=False)
+    uvicorn.run("app.api:app", host=settings.HOST, port=settings.PORT, reload=False)

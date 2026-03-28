@@ -7,12 +7,12 @@ from datetime import datetime, date, timedelta
 from typing import Any, Optional
 from collections import defaultdict
 from app.data.cache_manager import CacheManager
-from data.portfolio_snapshot import PortfolioSnapshotter
+from app.data.portfolio_snapshot import PortfolioSnapshotter
 import httpx
 import io
 from PIL import Image
 from colorthief import ColorThief
-from time_utils import dubai_today, dubai_now_iso
+from app.time_utils import dubai_today, dubai_now_iso
 
 
 def brand_color_from_url(url: str) -> Optional[str]:

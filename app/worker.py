@@ -6,8 +6,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from app.main import PortfolioManager
 from app.analytics import PortfolioAnalytics
 from app.data.cache_manager import CacheManager
-from data.data_collector import StockAnalysisScraper
-from time_utils import DUBAI_TZ, dubai_now
+from app.data.data_collector import StockAnalysisScraper
+from app.time_utils import DUBAI_TZ, dubai_now
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"

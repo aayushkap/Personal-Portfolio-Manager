@@ -2,13 +2,14 @@
 
 import gspread
 import os
-from pathlib import Path
 import re
+
+from app.config import ACCESS_DIR
 
 
 class GSheet_Manager:
     SERVICE_ACCOUNT_FILE = os.path.join(
-        os.path.dirname(Path(__file__).resolve().parent.parent),
+        ACCESS_DIR,
         os.getenv("GOOGLE_SHEETS_SERVICE_ACCOUNT_FILE"),
     )
     SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
@@ -44,11 +45,15 @@ class GSheet_Manager:
         logo_col_index = None
         headers = formula_rows[0] if formula_rows else []
 
+        result = []
+
         # Find which column is "Logo"
         if "Logo" in headers:
             logo_col_index = headers.index("Logo")
 
         for i, row in enumerate(rows):
+            clean_row = {}
+
             if logo_col_index is not None and i + 1 < len(formula_rows):
                 formula_cell = formula_rows[i + 1][logo_col_index]  # +1 to skip header
                 # Parse: =IMAGE("https://...") or =IMAGE(A1) or =IMAGE("url", mode)
@@ -60,4 +65,27 @@ class GSheet_Manager:
             else:
                 row["logo_url"] = None
 
-        return [r for r in rows if r.get("Symbol") and ":" in str(r.get("Symbol"))]
+            # Split Exchange and Symbol
+            if row.get("Symbol") and ":" in str(row.get("Symbol")):
+                exchange, symbol = row["Symbol"].split(":", 1)
+                row["Exchange"] = exchange
+                row["Symbol"] = symbol
+
+            if row.get("Logo", None) or row.get("Logo") == "":
+                del row["Logo"]
+            if (
+                row.get("Next Expected Dividend Amount", None)
+                or row.get("Next Expected Dividend Amount") == ""
+            ):
+                del row["Next Expected Dividend Amount"]
+            if (
+                row.get("Next Expected Dividend Date", None)
+                or row.get("Next Expected Dividend Date") == ""
+            ):
+                del row["Next Expected Dividend Date"]
+
+            for k, v in row.items():
+                clean_row[k.lower()] = v
+            result.append(clean_row)
+
+        return result

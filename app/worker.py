@@ -1,77 +1,68 @@
 import asyncio
-import logging
-import json
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+import app.config  # noqa
 
-from app.main import PortfolioManager
-from app.core.analytics import PortfolioAnalytics
-from app.data.cache_manager import CacheManager
-from app.scraper.data_collector import StockAnalysisScraper
 from app.utils import DUBAI_TZ, dubai_now
+from app.core.logger import get_logger
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
-)
-logger = logging.getLogger(__name__)
+from app.scraper.ohlc import _set_ohlc
+from app.scraper.sa import StockAnalysisScraper
+from app.data.gsheet import GSheet_Manager
+from app.data.cache import Cache
+
+
+logger = get_logger()
 
 
 async def ohlc_job():
     logger.info("OHLC job starting | now=%s", dubai_now().isoformat())
     try:
-        manager = PortfolioManager()
-        tickers = manager.get_tickers()
-        cache = CacheManager()
+        gsheets_fetcher = GSheet_Manager()
+        tickers = gsheets_fetcher.fetch_transactions()
 
         for ticker in tickers:
             try:
-                ohlc = await StockAnalysisScraper.get_ohlc(
-                    exchange=ticker["exchange"],
-                    symbol=ticker["symbol"],
-                    bars=100,
-                )
-                ticker_key = f"{ticker['exchange'].upper()}:{ticker['symbol']}"
-                stat = cache.append_ohlc(ticker_key, ohlc)
-                logger.info("%s +%s bars", ticker_key, stat.get("appended", 0))
+                if ticker.get("exchange") and ticker.get("symbol"):
+                    await _set_ohlc(
+                        exchange=ticker["exchange"],
+                        symbol=ticker["symbol"],
+                        bars=25,
+                    )
+                    logger.info(
+                        f"Set bars for: {ticker['exchange']}:{ticker['symbol']}"
+                    )
 
-            except Exception:
-                logger.exception("OHLC failed: %s", ticker)
-
-        await snapshot_job()
+            except Exception as e:
+                logger.exception("OHLC failed for %s: %s", ticker, str(e))
 
     except Exception:
         logger.exception("OHLC job failed")
 
 
 async def fundamentals_job():
-    """Heavy — full scrape (overview, financials, dividends, etc). Runs once daily."""
     logger.info("Fundamentals job starting | now=%s", dubai_now().isoformat())
     try:
-        manager = PortfolioManager()
-        await manager.run()
+        gsheets_fetcher = GSheet_Manager()
+        tickers = gsheets_fetcher.fetch_transactions()
 
-        results = PortfolioAnalytics().run()
-        with open("analytics_output.json", "w", encoding="utf-8") as f:
-            json.dump(results, f, indent=2, default=str)
+        for ticker in tickers:
+            try:
+                if ticker.get("exchange") and ticker.get("symbol"):
+                    ticker_key = f"{ticker['exchange']}:{ticker['symbol']}"
+                    obj = StockAnalysisScraper()
+                    scrape = await obj.scrape(
+                        {"exchange": ticker["exchange"], "symbol": ticker["symbol"]}
+                    )
 
-        await snapshot_job()
+                    cache = Cache()
+                    cache.save(ticker_key, scrape)
+                    logger.info(f"Set fundamentals for: {ticker_key}")
+
+            except Exception as e:
+                logger.exception("Fundamentals failed for %s: %s", ticker, str(e))
 
     except Exception:
         logger.exception("Fundamentals job failed")
-
-
-async def snapshot_job():
-    """Records portfolio snapshot using Dubai-local date."""
-    logger.info("Snapshot job | now=%s", dubai_now().isoformat())
-    try:
-        analytics = PortfolioAnalytics()
-        summary = analytics.run()
-        with open("analytics_output.json", "w", encoding="utf-8") as f:
-            json.dump(summary, f, indent=2, default=str)
-
-        logger.info("Snapshot saved. Analytics done.")
-
-    except Exception:
-        logger.exception("Snapshot job failed")
 
 
 async def main():
@@ -103,15 +94,7 @@ async def main():
 
     scheduler.start()
 
-    logger.info(
-        "Worker started\n"
-        "  Timezone:     Asia/Dubai\n"
-        "  OHLC:         Mon-Fri every 30 min (10:00-16:30 Asia/Dubai)\n"
-        "  Fundamentals: Mon-Fri once at 00:05 Asia/Dubai"
-    )
-
     await fundamentals_job()
-    await ohlc_job()
 
     try:
         while True:
@@ -119,3 +102,9 @@ async def main():
     except (KeyboardInterrupt, SystemExit):
         scheduler.shutdown()
         logger.info("Worker stopped.")
+
+
+if __name__ == "__main__":
+    import asyncio
+
+    asyncio.run(main())

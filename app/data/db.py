@@ -2,10 +2,8 @@
 
 import sqlite3
 from typing import Optional
-from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parents[2]
-DB_PATH = BASE_DIR / "portfolio.db"
+from app.config import DB_PATH
 
 
 class DB:

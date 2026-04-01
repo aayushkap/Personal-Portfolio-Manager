@@ -11,7 +11,7 @@ from dateutil import parser
 import logging
 from playwright.async_api import async_playwright, Browser, Page, BrowserContext
 from playwright_stealth import stealth_async
-from app.utils import dubai_now_iso
+from app.utils.time_utils import dubai_now_iso
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
@@ -148,8 +148,8 @@ class StockAnalysisScraper:
         data = {
             "symbol": symbol,
             "exchange": exchange.upper(),
-            "url": url,
-            "scraped_at": dubai_now_iso(),
+            # "url": url,
+            # "scraped_at": dubai_now_iso(),
         }
 
         # Price and change

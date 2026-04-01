@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.logger import get_logger
-from app.utils import dubai_now_iso
+from app.utils.time_utils import dubai_now_iso
 from app.config import CACHE_DIR
 
 logger = get_logger()

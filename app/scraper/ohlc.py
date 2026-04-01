@@ -34,9 +34,8 @@ async def _set_ohlc(
 
             if df is not None and not df.empty:
                 df = df.reset_index().rename(columns={"index": "datetime"})
-                dt = pd.to_datetime(
-                    df["datetime"], errors="coerce", utc=True
-                ).dt.tz_convert("Asia/Dubai")
+                dt = pd.to_datetime(df["datetime"], errors="coerce")
+                dt = dt.dt.tz_localize("Asia/Dubai")
                 df["datetime"] = dt.apply(lambda ts: ts.isoformat())
 
                 DB().upsert_many(

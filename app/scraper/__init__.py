@@ -14,15 +14,3 @@ class Scraper:
 
     async def get_fundamentals(self):
         pass
-
-
-import asyncio
-
-
-async def main():
-    obj = Scraper()
-    print(await obj.get_ohlc("ADX", "IHC"))
-
-
-if __name__ == "__main__":
-    asyncio.run(main())

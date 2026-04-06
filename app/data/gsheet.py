@@ -5,6 +5,7 @@ import os
 import re
 
 from app.config import ACCESS_DIR
+from app.utils.time_utils import normalise_date
 
 
 class GSheet_Manager:
@@ -85,7 +86,7 @@ class GSheet_Manager:
                 del row["Next Expected Dividend Date"]
 
             for k, v in row.items():
-                clean_row[k.lower()] = v
+                clean_row[k.replace(" ", "_").lower()] = v
+            clean_row["purchase_date"] = normalise_date(clean_row.get("purchase_date"))
             result.append(clean_row)
-
         return result

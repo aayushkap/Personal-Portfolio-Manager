@@ -1,15 +1,13 @@
 # app/api/__init_.py
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic_settings import BaseSettings
 import asyncio
-from pathlib import Path
 from contextlib import asynccontextmanager
 
 from app.worker import main as worker_main
 from dotenv import load_dotenv
-from app.api.routes import router
+from app.api.overview import router
 
 load_dotenv()
 

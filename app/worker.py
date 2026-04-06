@@ -15,7 +15,7 @@ from app.data.cache import Cache
 logger = get_logger()
 
 
-async def ohlc_job():
+async def ohlc_job(bars: int = 100):
     logger.info("OHLC job starting | now=%s", dubai_now().isoformat())
     try:
         gsheets_fetcher = GSheet_Manager()
@@ -27,7 +27,7 @@ async def ohlc_job():
                     await _set_ohlc(
                         exchange=ticker["exchange"],
                         symbol=ticker["symbol"],
-                        bars=500,
+                        bars=bars,
                     )
                     logger.info(
                         f"Set bars for: {ticker['exchange']}:{ticker['symbol']}"
@@ -83,13 +83,13 @@ async def fundamentals_job():
 async def main():
     scheduler = AsyncIOScheduler(timezone=DUBAI_TZ)
 
-    # OHLC — every 30 min, Mon-Fri, 10:00–16:30 Asia/Dubai
+    # OHLC — every 20 min, Mon-Fri, 10:00–16:00 Asia/Dubai
     scheduler.add_job(
         ohlc_job,
         "cron",
         day_of_week="mon-fri",
         hour="10-16",
-        minute="*/30",
+        minute="*/20",
         id="ohlc_intraday",
         max_instances=1,
         misfire_grace_time=120,
@@ -110,7 +110,7 @@ async def main():
     scheduler.start()
 
     # await fundamentals_job()
-    # await ohlc_job()
+    # await ohlc_job(bars=2500)  # First time get all. Then default to 100
 
     try:
         while True:

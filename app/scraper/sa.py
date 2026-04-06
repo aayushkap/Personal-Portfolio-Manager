@@ -8,15 +8,13 @@ import random
 import re
 from typing import Dict, Any
 from dateutil import parser
-import logging
 from playwright.async_api import async_playwright, Browser, Page, BrowserContext
 from playwright_stealth import stealth_async
 from app.utils.time_utils import dubai_now_iso
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
-)
-logger = logging.getLogger(__name__)
+from app.core.logger import get_logger
+
+logger = get_logger()
 
 
 class StockAnalysisScraper:
@@ -82,6 +80,16 @@ class StockAnalysisScraper:
             await page.mouse.move(x, y, steps=random.randint(8, 20))
             await asyncio.sleep(random.uniform(0.08, 0.25))
 
+    @staticmethod
+    def _to_iso_date(value: str) -> str | None:
+        """Normalise any human-readable date string to YYYY-MM-DD. Returns None for missing/invalid."""
+        if not value or value.strip() in {"-", "—", "N/A", "None", ""}:
+            return None
+        try:
+            return parser.parse(value.strip()).date().isoformat()
+        except Exception:
+            return None
+
     async def _safe_goto(
         self, page: Page, url: str, wait_for: str = "domcontentloaded"
     ) -> None:
@@ -96,7 +104,7 @@ class StockAnalysisScraper:
                 if attempt == self.max_retries - 1:
                     raise
                 wait = random.uniform(3, 7)
-                print(
+                logger.info(
                     f"  Retry {attempt + 1}/{self.max_retries} for {url} — {exc} — waiting {wait:.1f}s"
                 )
                 await asyncio.sleep(wait)
@@ -189,6 +197,12 @@ class StockAnalysisScraper:
             pass
 
         data["stats"] = stats
+
+        DATE_FIELDS_OVERVIEW = {"Ex-Dividend Date", "Earnings Date", "IPO Date"}
+        for field in DATE_FIELDS_OVERVIEW:
+            if field in data["stats"]:
+                data["stats"][field] = self._to_iso_date(data["stats"][field])
+
         await self._jitter(0.8, 1.5)
         return data
 
@@ -281,11 +295,7 @@ class StockAnalysisScraper:
                         col = headers[i] if i < len(headers) else f"col_{i}"
 
                         if col in {"Ex-Dividend Date", "Record Date", "Pay Date"}:
-                            try:
-                                v = parser.parse(v).date().isoformat()
-                            except Exception:
-                                pass
-
+                            v = self._to_iso_date(v)
                         row_dict[col] = v
 
                     rows.append(row_dict)
@@ -354,13 +364,22 @@ class StockAnalysisScraper:
                     key = (await tds[0].inner_text()).strip().rstrip(":")
                     raw = await tds[1].get_attribute("title") or ""
                     disp = (await tds[1].inner_text()).strip()
-                    value = raw.strip() if raw.strip() and raw.strip() != disp else disp
+                    # value = raw.strip() if raw.strip() and raw.strip() != disp else disp
 
                     if key:
                         section_data[key] = raw.strip() or disp
 
                 if section_data:
                     data["sections"][section_name] = section_data
+
+            DATE_SECTIONS = {"Important Dates", "Stock Splits"}
+            DATE_KEYWORDS = {"date", "split date"}
+
+            for section, fields in data["sections"].items():
+                if section in DATE_SECTIONS:
+                    for key in list(fields.keys()):
+                        if any(kw in key.lower() for kw in DATE_KEYWORDS):
+                            fields[key] = self._to_iso_date(fields[key])
 
             # Flat views
             data["all_stats"] = {
@@ -486,10 +505,8 @@ class StockAnalysisScraper:
                 if section_name != "ohlc":
                     await self._jitter(1.5, 2.0)
             except Exception as exc:
-                print(f"  [SKIP] {key} › {section_name}: {exc}")
-                result[section_name] = {
-                    "error": str(exc)
-                }  # section failed, not the ticker
+                logger.warning("%s > %s failed: %s", key, section_name, exc)
+                result[section_name] = None
 
         # Ticker is only fully failed if EVERY section errored
         all_failed = all(
@@ -505,7 +522,7 @@ class StockAnalysisScraper:
             pass
 
         cooldown = random.uniform(15.0, 30.0)
-        print(f"Cooling down {cooldown:.1f}s …")
+        logger.info(f"Cooling down {cooldown:.1f}s …")
         await asyncio.sleep(cooldown)
 
         return result

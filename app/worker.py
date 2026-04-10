@@ -1,16 +1,16 @@
+# app/worker.py
+
 import asyncio
+from collections import defaultdict
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import app.config  # noqa
-from collections import defaultdict
 
 from app.utils.time_utils import DUBAI_TZ, dubai_now
 from app.core.logger import get_logger
-
 from app.scraper.ohlc import _set_ohlc
 from app.scraper.sa import StockAnalysisScraper
 from app.data.gsheet import GSheet_Manager
 from app.data.cache import Cache
-
 
 logger = get_logger()
 
@@ -18,21 +18,24 @@ logger = get_logger()
 async def ohlc_job(bars: int = 100):
     logger.info("OHLC job starting | now=%s", dubai_now().isoformat())
     try:
-        gsheets_fetcher = GSheet_Manager()
-        tickers = gsheets_fetcher.fetch_transactions()
+        gs = GSheet_Manager()
+        tickers = gs.fetch_transactions() + gs.fetch_watchlist()
 
-        for ticker in tickers:
+        seen = set()
+        for t in tickers:
+            key = t.get("ticker")
+            if not key or key in seen:
+                continue
+            seen.add(key)
             try:
-                if ticker.get("exchange") and ticker.get("symbol"):
-                    await _set_ohlc(
-                        exchange=ticker["exchange"],
-                        symbol=ticker["symbol"],
-                        bars=bars,
-                    )
-
-            except Exception as e:
-                logger.exception("OHLC failed for %s: %s", ticker, str(e))
-
+                await _set_ohlc(
+                    tv_exchange=t["exchange"],
+                    sa_exchange=t["sa_exchange"],
+                    symbol=t["symbol"],
+                    bars=bars,
+                )
+            except Exception:
+                logger.exception("OHLC failed for %s", key)
     except Exception:
         logger.exception("OHLC job failed")
 
@@ -40,39 +43,46 @@ async def ohlc_job(bars: int = 100):
 async def fundamentals_job():
     logger.info("Fundamentals job starting | now=%s", dubai_now().isoformat())
     try:
-        gsheets_fetcher = GSheet_Manager()
-        transactions = gsheets_fetcher.fetch_transactions()
+        gs = GSheet_Manager()
+        transactions = []  # gs.fetch_transactions()
+        watchlist = gs.fetch_watchlist()
 
-        grouped = defaultdict(list)
+        # Group transactions by canonical key, watchlist items have no purchases
+        grouped: dict[str, dict] = defaultdict(
+            lambda: {"ticker_info": None, "purchases": []}
+        )
         for txn in transactions:
-            exchange = txn.get("exchange")
-            symbol = txn.get("symbol")
-            if exchange and symbol:
-                ticker_key = f"{exchange}:{symbol}"
-                grouped[ticker_key].append(txn)
+            key = txn.get("ticker")
+            if not key:
+                continue
+            grouped[key]["ticker_info"] = txn
+            grouped[key]["purchases"].append(txn)
+
+        for item in watchlist:
+            key = item.get("ticker")
+            if key and key not in grouped:
+                grouped[key]["ticker_info"] = item
+                grouped[key]["purchases"] = []
 
         obj = StockAnalysisScraper()
         cache = Cache()
 
-        for ticker_key, purchase_details in grouped.items():
+        for key, data in grouped.items():
+            info = data["ticker_info"]
             try:
-                exchange, symbol = ticker_key.split(":", 1)
-
-                scrape = await obj.scrape({"exchange": exchange, "symbol": symbol})
-
-                # keep all purchases for this ticker
-                scrape["purchase_details"] = purchase_details
-
-                cache.save(ticker_key, scrape)
-                logger.info(
-                    "Set fundamentals for: %s (%d purchases)",
-                    ticker_key,
-                    len(purchase_details),
+                # SA scraper gets sa_exchange so it hits the right URL
+                scrape = await obj.scrape(
+                    {
+                        "exchange": info["sa_exchange"],
+                        "symbol": info["sa_symbol"],
+                    }
                 )
-
-            except Exception as e:
-                logger.exception("Fundamentals failed for %s: %s", ticker_key, str(e))
-
+                scrape["purchase_details"] = data["purchases"]
+                # Always save under the canonical TV key
+                cache.save(key, scrape)
+                logger.info("Fundamentals saved: %s (sa=%s)", key, info["sa_exchange"])
+            except Exception:
+                logger.exception("Fundamentals failed for %s", key)
     except Exception:
         logger.exception("Fundamentals job failed")
 
@@ -80,7 +90,6 @@ async def fundamentals_job():
 async def main():
     scheduler = AsyncIOScheduler(timezone=DUBAI_TZ)
 
-    # OHLC — every 15 min, Mon-Fri, 10:00–16:00 Asia/Dubai
     scheduler.add_job(
         ohlc_job,
         "cron",
@@ -91,8 +100,6 @@ async def main():
         max_instances=1,
         misfire_grace_time=120,
     )
-
-    # Fundamentals — once daily at 00:05 Asia/Dubai
     scheduler.add_job(
         fundamentals_job,
         "cron",
@@ -105,9 +112,8 @@ async def main():
     )
 
     scheduler.start()
-
     # await fundamentals_job()
-    await ohlc_job(bars=5000)  # First time get all. Then default to 100
+    await ohlc_job(bars=1000)
 
     try:
         while True:
@@ -118,6 +124,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    import asyncio
-
     asyncio.run(main())

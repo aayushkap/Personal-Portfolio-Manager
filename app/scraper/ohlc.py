@@ -11,7 +11,8 @@ logger = get_logger()
 
 
 async def _set_ohlc(
-    exchange: str,
+    tv_exchange: str,
+    sa_exchange: str,  # kept for future use
     symbol: str,
     interval=Interval.in_15_minute,
     bars: int = 100,
@@ -19,14 +20,14 @@ async def _set_ohlc(
     base_delay: float = 3.0,
 ):
     loop = asyncio.get_running_loop()
-
+    storage_key = f"{tv_exchange}:{symbol}"
     for attempt in range(1, max_retries + 1):
         try:
             df = await loop.run_in_executor(
                 None,
                 lambda: TvDatafeed().get_hist(
                     symbol=symbol,
-                    exchange=exchange,
+                    exchange=tv_exchange,  # TV always uses tv_exchange
                     interval=interval,
                     n_bars=bars,
                 ),
@@ -34,14 +35,15 @@ async def _set_ohlc(
 
             if df is not None and not df.empty:
                 df = df.reset_index().rename(columns={"index": "datetime"})
-                dt = pd.to_datetime(df["datetime"], errors="coerce")
-                dt = dt.dt.tz_localize("Asia/Dubai")
+                dt = pd.to_datetime(df["datetime"], errors="coerce").dt.tz_localize(
+                    "Asia/Dubai"
+                )
                 df["datetime"] = dt.apply(lambda ts: ts.isoformat())
 
                 DB().upsert_many(
                     [
                         {
-                            "symbol": f"{exchange}:{symbol}",
+                            "symbol": storage_key,
                             "timestamp": row["datetime"],
                             "close": row["close"],
                             "volume": row["volume"],
@@ -51,37 +53,24 @@ async def _set_ohlc(
                         )
                     ]
                 )
-
-                logger.info("%s:%s — upserted %d bars", exchange, symbol, len(df))
+                logger.info("%s — upserted %d bars", storage_key, len(df))
                 return
 
-            # Empty df — retry
             if attempt == max_retries:
                 logger.error(
-                    "%s:%s — all %d attempts returned empty",
-                    exchange,
-                    symbol,
-                    max_retries,
+                    "%s — all %d attempts returned empty", storage_key, max_retries
                 )
                 return
 
         except Exception as exc:
             if attempt == max_retries:
                 logger.error(
-                    "%s:%s — all %d attempts failed: %s",
-                    exchange,
-                    symbol,
-                    max_retries,
-                    exc,
+                    "%s — all %d attempts failed: %s", storage_key, max_retries, exc
                 )
                 return
 
         delay = base_delay * (2 ** (attempt - 1)) + random.uniform(0, 1.5)
         logger.warning(
-            "%s:%s — attempt %d failed, retrying in %.1fs",
-            exchange,
-            symbol,
-            attempt,
-            delay,
+            "%s — attempt %d failed, retrying in %.1fs", storage_key, attempt, delay
         )
         await asyncio.sleep(delay)

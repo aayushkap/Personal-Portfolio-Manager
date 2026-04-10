@@ -11,6 +11,7 @@ from app.api.overview import router as overview
 from app.api.analytics import router as analytics
 from app.api.correlation import router as correlation
 from app.api.holdings import router as holdings
+from app.api.watchlist import router as watchlist
 
 load_dotenv()
 
@@ -26,6 +27,7 @@ app.include_router(overview)
 app.include_router(analytics)
 app.include_router(correlation)
 app.include_router(holdings)
+app.include_router(watchlist)
 
 app.add_middleware(
     CORSMiddleware,

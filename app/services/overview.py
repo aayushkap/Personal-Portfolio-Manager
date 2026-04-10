@@ -10,10 +10,16 @@ import pandas as pd
 from app.core.logger import get_logger
 from app.services.base import BaseModule
 from app.services.filters import PortfolioFilters
+import math
+
 
 logger = get_logger()
 
-_EPOCH = date(2000, 1, 1)
+
+def _safe_float(v):
+    if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+        return None
+    return v
 
 
 class OverviewModule(BaseModule):
@@ -39,7 +45,9 @@ class OverviewModule(BaseModule):
 
         tickers = tx["ticker"].unique().tolist()
 
-        trend = self._build_trend(tx, tickers, filters)
+        trend = self._build_trend(
+            tx, tickers, filters, overlays=getattr(filters, "overlays", [])
+        )
         summary = self._build_summary(tx, tickers, trend)
         events = self._build_events(tx, tickers, filters) if include_events else []
 
@@ -50,6 +58,7 @@ class OverviewModule(BaseModule):
         tx: pd.DataFrame,
         tickers: list[str],
         filters: PortfolioFilters,
+        overlays: list[str],
     ) -> list[dict]:
         prices = self.get_price_series(
             tickers, filters.date_range.start, filters.date_range.end
@@ -79,10 +88,16 @@ class OverviewModule(BaseModule):
             }
         )
 
-        trend_df = trend_df.replace([float("inf"), float("-inf")], None)
-        trend_df = trend_df.where(pd.notna(trend_df), other=None)
+        if "SMA" in overlays:
+            sma = self.get_portfolio_sma(filters)
+            trend_df["sma"] = sma.reindex(trading_days).round(2).values
 
-        return trend_df.to_dict(orient="records")
+        trend_df = trend_df.replace([float("inf"), float("-inf")], None)
+
+        return [
+            {k: _safe_float(v) for k, v in row.items()}
+            for row in trend_df.to_dict(orient="records")
+        ]
 
     def _build_summary(
         self,
@@ -173,29 +188,6 @@ class OverviewModule(BaseModule):
         return sorted(events, key=lambda x: x["date"])
 
     # Private helpers
-
-    def _holdings_matrix(
-        self, tx: pd.DataFrame, trading_days: pd.DatetimeIndex
-    ) -> pd.DataFrame:
-        tx = tx.copy()
-        tx["date"] = (
-            pd.to_datetime(tx["trade_date"]).dt.tz_localize("Asia/Dubai").dt.normalize()
-        )
-
-        pivot = (
-            tx.pivot_table(
-                index="date",
-                columns="ticker",
-                values="signed_shares",
-                aggfunc="sum",
-                fill_value=0,
-            )
-            .sort_index()
-            .cumsum()
-        )
-
-        return pivot.reindex(trading_days, method="ffill").fillna(0).clip(lower=0)
-
     def _invested_series(
         self, tx: pd.DataFrame, trading_days: pd.DatetimeIndex
     ) -> pd.Series:
@@ -240,23 +232,3 @@ class OverviewModule(BaseModule):
             pd.DataFrame(records).groupby("date")["amount"].sum().sort_index().cumsum()
         )
         return daily.reindex(trading_days, method="ffill").fillna(0.0)
-
-    def _total_dividends_received(
-        self,
-        tickers: list[str],
-        tx: pd.DataFrame,
-        as_of: date,
-    ) -> float:
-        total = 0.0
-        for ticker_key in tickers:
-            for div in self.get_dividends(ticker_key):
-                if not div.pay_date or div.pay_date > as_of or not div.cash_amount:
-                    continue
-                holdings = self.get_holdings(div.ex_date, [ticker_key], tx)
-                shares = holdings.get(ticker_key, 0.0)
-                if shares > 0:
-                    try:
-                        total += float(div.cash_amount.split()[0]) * shares
-                    except Exception:
-                        pass
-        return total

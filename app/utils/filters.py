@@ -32,19 +32,19 @@ def get_all_transactions() -> pd.DataFrame:
                         t["purchase date"], format="%m/%d/%Y"
                     ).date(),
                     "shares": float(t["shares"]),
-                    "price_aed": float(
+                    "price": float(
                         str(t["cost per share"])
                         .replace("AED", "")
                         .replace(",", "")
                         .strip()
                     ),
-                    "commission_aed": float(
+                    "commission": float(
                         str(t["commision paid"])
                         .replace("AED", "")
                         .replace(",", "")
                         .strip()
                     ),
-                    "total_cost_aed": float(
+                    "total_cost": float(
                         str(t["total cost"]).replace("AED", "").replace(",", "").strip()
                     ),
                     "platform": t.get("platform"),
@@ -140,7 +140,7 @@ def get_dividend_events(
                         "ticker": ticker,
                         "ex_date": pd.to_datetime(row["Ex-Dividend Date"]).date(),
                         "pay_date": pd.to_datetime(row["Pay Date"]).date(),
-                        "amount_aed": float(
+                        "amount": float(
                             str(row["Cash Amount"]).replace("AED", "").strip()
                         ),
                     }
@@ -160,7 +160,7 @@ def get_dividends_received(
     """
     Returns dividends YOU personally received: cross-references
     ex-dates with your holdings on that date.
-    Returns: {ticker, ex_date, pay_date, amount_aed, shares_held, total_received_aed}
+    Returns: {ticker, ex_date, pay_date, amount, shares_held, total_received}
     """
     tx = transactions if transactions is not None else get_all_transactions()
     dividends = get_dividend_events(tickers)
@@ -181,7 +181,7 @@ def get_dividends_received(
                 {
                     **div.to_dict(),
                     "shares_held": shares,
-                    "total_received_aed": shares * div["amount_aed"],
+                    "total_received": shares * div["amount"],
                 }
             )
 

@@ -7,7 +7,10 @@ from contextlib import asynccontextmanager
 
 from app.worker import main as worker_main
 from dotenv import load_dotenv
-from app.api.overview import router
+from app.api.overview import router as overview
+from app.api.analytics import router as analytics
+from app.api.correlation import router as correlation
+from app.api.holdings import router as holdings
 
 load_dotenv()
 
@@ -18,8 +21,11 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="APP NAME", lifespan=lifespan)
-app.include_router(router)
+app = FastAPI(title="BBBB BE", lifespan=lifespan)
+app.include_router(overview)
+app.include_router(analytics)
+app.include_router(correlation)
+app.include_router(holdings)
 
 app.add_middleware(
     CORSMiddleware,
@@ -32,7 +38,7 @@ app.add_middleware(
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "service": "APP NAME"}
+    return {"status": "ok", "service": "BBBB BE"}
 
 
 if __name__ == "__main__":

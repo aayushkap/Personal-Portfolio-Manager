@@ -49,6 +49,7 @@ class PortfolioFilters:
     sectors: Optional[list[str]] = None  # None = all sectors
     exchanges: Optional[list[str]] = None  # None = DFM + ADX
     tickers: Optional[list[str]] = None  # None = all current holdings
+    overlays: Optional[list[str]] = None
 
     # Preset constructors
     @classmethod

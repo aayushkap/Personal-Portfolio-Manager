@@ -20,6 +20,9 @@ from functools import lru_cache
 from app.data.cache import Cache
 from app.data.db import DB
 from app.services.overview import OverviewModule
+from app.services.analytics import AnalyticsModule
+from app.services.correlation import CorrelationModule
+from app.services.holdings import HoldingsModule
 
 
 @lru_cache(maxsize=1)
@@ -36,3 +39,18 @@ def get_db() -> DB:
 @lru_cache(maxsize=1)
 def get_overview_module() -> OverviewModule:
     return OverviewModule(cache=get_cache(), db=get_db())
+
+
+@lru_cache(maxsize=1)
+def get_analytics_module() -> AnalyticsModule:
+    return AnalyticsModule(cache=get_cache(), db=get_db())
+
+
+@lru_cache(maxsize=1)
+def get_correlation_module() -> CorrelationModule:
+    return CorrelationModule(cache=get_cache(), db=get_db())
+
+
+@lru_cache(maxsize=1)
+def get_holdings_module() -> HoldingsModule:
+    return HoldingsModule(cache=get_cache(), db=get_db())

@@ -20,11 +20,21 @@ schemas needed unless strict typing is required later.
 from __future__ import annotations
 
 from datetime import date, timedelta
-from typing import Optional
+from typing import Optional, List
 
 from pydantic import BaseModel, field_validator, model_validator
 
 from app.services.filters import DateRange, PortfolioFilters
+from pydantic import Field
+
+
+class PerformanceRequest(BaseModel):
+    start_date: date = Field(default_factory=lambda: date.today() - timedelta(days=120))
+    end_date: date = Field(default_factory=lambda: date.today())
+    instruments: Optional[List[str]] = None
+    sectors: Optional[List[str]] = None
+    include_dividends_and_events: bool = False
+    overlays: List[str] = Field(default_factory=list)
 
 
 class DateRangeRequest(BaseModel):

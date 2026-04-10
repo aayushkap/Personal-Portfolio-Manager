@@ -29,9 +29,6 @@ async def ohlc_job(bars: int = 100):
                         symbol=ticker["symbol"],
                         bars=bars,
                     )
-                    logger.info(
-                        f"Set bars for: {ticker['exchange']}:{ticker['symbol']}"
-                    )
 
             except Exception as e:
                 logger.exception("OHLC failed for %s: %s", ticker, str(e))
@@ -83,13 +80,13 @@ async def fundamentals_job():
 async def main():
     scheduler = AsyncIOScheduler(timezone=DUBAI_TZ)
 
-    # OHLC — every 20 min, Mon-Fri, 10:00–16:00 Asia/Dubai
+    # OHLC — every 15 min, Mon-Fri, 10:00–16:00 Asia/Dubai
     scheduler.add_job(
         ohlc_job,
         "cron",
         day_of_week="mon-fri",
         hour="10-16",
-        minute="*/20",
+        minute="*/15",
         id="ohlc_intraday",
         max_instances=1,
         misfire_grace_time=120,
@@ -110,7 +107,7 @@ async def main():
     scheduler.start()
 
     # await fundamentals_job()
-    # await ohlc_job(bars=2500)  # First time get all. Then default to 100
+    await ohlc_job(bars=5000)  # First time get all. Then default to 100
 
     try:
         while True:

@@ -26,7 +26,7 @@ class OverviewModule(BaseModule):
     """
     Overview page data.
 
-    get_overview(filters) → {
+    get_overview(filters) : {
         summary:  { total_invested, price_return, total_return, ... },
         trend:    [ { date, total_invested, market_value, total_return }, ... ],
         events:   [ { date, type, ticker, amount, description }, ... ]

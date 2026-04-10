@@ -41,7 +41,7 @@ class CorrelationModule(BaseModule):
     """
     Pearson correlation matrix on log returns for a set of instruments.
 
-    get_matrix(tickers, period) → {
+    get_matrix(tickers, period) : {
         period:    "1y",
         start:     "2025-04-07",
         end:       "2026-04-07",

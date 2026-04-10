@@ -626,7 +626,7 @@ def _clean_str(v) -> str | None:
 def _parse_growth_trends(financials) -> dict:
     """
     Extract key multi-year metrics from financials tabular rows.
-    Returns dict of metric → {FY2025, FY2024, FY2023, ...}
+    Returns dict of metric : {FY2025, FY2024, FY2023, ...}
     """
     WANTED = {
         "Revenue": "revenue",

@@ -16,7 +16,7 @@ _fmt = logging.Formatter(
 
 _file_handler = RotatingFileHandler(
     LOG_PATH, maxBytes=1_000_000, backupCount=0
-)  # backupCount=0 → just delete
+)  # backupCount=0 : just delete
 _file_handler.setFormatter(_fmt)
 
 _console_handler = logging.StreamHandler()

@@ -10,14 +10,9 @@ import pandas as pd
 
 from app.core.logger import get_logger
 from app.services.base import BaseModule
+from app.utils.fin import parse_money, safe_float as _safe
 
 logger = get_logger()
-
-
-def _safe(v):
-    if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
-        return None
-    return v
 
 
 def _pct(new: Optional[float], old: Optional[float]) -> Optional[float]:
@@ -37,11 +32,25 @@ class WatchlistModule(BaseModule):
             tickers, today - timedelta(days=400), today
         ).ffill()
 
+        # Build a minimal currency map from cache purchase_details
+        currency_map = {}
+        for ticker in tickers:
+            data = self.get_ticker(ticker)
+            if data and data.purchase_details:
+                _, cur = parse_money(data.purchase_details[0].cost_per_share)
+                if cur:
+                    currency_map[ticker] = cur
+
+        # Convert prices to AED
+        for ticker in prices.columns:
+            currency = currency_map.get(ticker, "AED")
+            prices[ticker] *= self.fx.get(currency, 1.0)
+
         return [
             row
             for item in items
             if item.get("ticker")
-            for row in [self._build_row(item, prices, today)]
+            for row in [self._build_row(item, prices, today, currency_map)]
             if row
         ]
 
@@ -54,11 +63,14 @@ class WatchlistModule(BaseModule):
         }
 
     def _build_row(
-        self, item: dict, prices: pd.DataFrame, today: date
+        self, item: dict, prices: pd.DataFrame, today: date, currency_map: dict = {}
     ) -> Optional[dict]:
         ticker = item["ticker"]
 
-        current_price = self.get_latest_price(ticker)
+        raw_price = self.get_latest_price(ticker)
+        currency = currency_map.get(ticker, "AED")
+        current_price = raw_price * self.fx.get(currency, 1.0) if raw_price else None
+
         col = prices.get(ticker) if isinstance(prices, pd.DataFrame) else None
 
         def _ago(days: int) -> Optional[float]:

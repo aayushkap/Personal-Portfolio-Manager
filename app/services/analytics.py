@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import calendar
-from datetime import date
+from datetime import date, timedelta
 from typing import Literal
+import pandas as pd
 
 
 from app.core.logger import get_logger
 from app.services.base import BaseModule
+from app.utils.fin import parse_money
 
 logger = get_logger()
 
@@ -44,7 +46,14 @@ class AnalyticsModule(BaseModule):
 
         today = date.today()
         tickers = tx["ticker"].unique().tolist()
-        prices = self.get_latest_prices(tickers)
+        ticker_currency = (
+            tx.drop_duplicates("ticker").set_index("ticker")["currency"].to_dict()
+        )
+        raw_prices = self.get_latest_prices(tickers)
+        prices = {
+            t: p * self.fx.get(ticker_currency.get(t, "AED"), 1.0)
+            for t, p in raw_prices.items()
+        }
         positions = []
 
         for ticker in tickers:
@@ -124,7 +133,15 @@ class AnalyticsModule(BaseModule):
         if not holdings:
             return {"by": by, "total_market_value": 0.0, "allocations": []}
 
-        prices = self.get_latest_prices(list(holdings.keys()))
+        ticker_currency = (
+            tx.drop_duplicates("ticker").set_index("ticker")["currency"].to_dict()
+        )
+        raw_prices = self.get_latest_prices(list(holdings.keys()))
+        prices = {
+            t: p * self.fx.get(ticker_currency.get(t, "AED"), 1.0)
+            for t, p in raw_prices.items()
+        }
+
         mv_ticker = {t: round(s * prices.get(t, 0.0), 2) for t, s in holdings.items()}
         total_mv = sum(mv_ticker.values())
         if not total_mv:
@@ -179,10 +196,11 @@ class AnalyticsModule(BaseModule):
             for div in divs:
                 if not div.cash_amount:
                     continue
-                try:
-                    per_share = float(div.cash_amount.split()[0])
-                except Exception:
+
+                per_share, currency = parse_money(div.cash_amount)
+                if not per_share:
                     continue
+                per_share = per_share * self.fx.get(currency, 1.0)
 
                 ref_date = div.pay_date or div.ex_date
                 if not ref_date:
@@ -226,8 +244,23 @@ class AnalyticsModule(BaseModule):
 
         total_cost = tx[tx["action"] == "BUY"]["total_cost"].sum()
         total_received = sum(e["amount"] for e in events if e["status"] == "received")
-        yield_on_cost = (
-            round(total_received / total_cost * 100, 2) if total_cost else 0.0
+        yoc_alltime = round(total_received / total_cost * 100, 2) if total_cost else 0.0
+
+        # Trailing 12M YoC: divs received in last 365 days / cost basis as of a year ago
+        one_year_ago = today - timedelta(days=365)
+        trailing_divs = sum(
+            e["amount"]
+            for e in events
+            if e["status"] == "received"
+            and e["pay_date"]
+            and e["pay_date"] >= one_year_ago.isoformat()
+        )
+        cost_1y_ago = tx[
+            (tx["action"] == "BUY")
+            & (pd.to_datetime(tx["trade_date"]).dt.date <= one_year_ago)
+        ]["total_cost"].sum()
+        yoc_trailing_12m = (
+            round(trailing_divs / cost_1y_ago * 100, 2) if cost_1y_ago else 0.0
         )
 
         events.sort(key=lambda x: x["pay_date"] or x["ex_date"] or "")
@@ -236,7 +269,8 @@ class AnalyticsModule(BaseModule):
             "summary": {
                 "total_received_alltime": round(total_received, 2),
                 "ytd_received": round(ytd_total, 2),
-                "yield_on_cost_pct": yield_on_cost,
+                "yoc_alltime_pct": yoc_alltime,
+                "yoc_trailing_12m_pct": yoc_trailing_12m,
                 "current_quarter": _quarter_label(today),
                 "quarter_projected": round(q_total, 2),
             },
@@ -249,9 +283,10 @@ class AnalyticsModule(BaseModule):
         q_start, q_end = _quarter_bounds(today)
         return {
             "summary": {
-                "total_received": 0.0,
+                "total_received_alltime": 0.0,
                 "ytd_received": 0.0,
-                "yield_on_cost_pct": 0.0,
+                "yoc_alltime_pct": 0.0,
+                "yoc_trailing_12m_pct": 0.0,
                 "current_quarter": _quarter_label(today),
                 "quarter_projected": 0.0,
             },

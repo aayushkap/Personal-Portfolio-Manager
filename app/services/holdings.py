@@ -4,21 +4,15 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from typing import Optional
-import math
 
 import pandas as pd
 
 from app.core.logger import get_logger
 from app.services.base import BaseModule
 from app.services.filters import PortfolioFilters
+from app.utils.fin import safe_float as _safe, parse_money
 
 logger = get_logger()
-
-
-def _safe(v):
-    if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
-        return None
-    return v
 
 
 def _pct_change(new: Optional[float], old: Optional[float]) -> Optional[float]:
@@ -39,9 +33,11 @@ class HoldingsModule(BaseModule):
         if not tickers:
             return []
 
-        # Batch-fetch prices for sparkline window + change periods (90d)
         lookback_start = today - timedelta(days=120)
         prices = self.get_price_series(tickers, lookback_start, today).ffill()
+
+        # Convert all price columns to AED here — _build_card reads from this
+        prices = self._prices_to_aed(prices, tx)
 
         results = []
         for ticker in tickers:
@@ -93,7 +89,17 @@ class HoldingsModule(BaseModule):
         cost_basis = round(bought - sold, 2)
 
         # Current price + market value
+        ticker_currency = (
+            ticker_tx.iloc[0]["currency"] if "currency" in ticker_tx.columns else "AED"
+        )
+        raw_price = self.get_latest_price(ticker)
         current_price = self.get_latest_price(ticker)
+        ticker_currency = (
+            ticker_tx.iloc[0]["currency"] if "currency" in ticker_tx.columns else "AED"
+        )
+        current_price = (
+            current_price * self.fx.get(ticker_currency, 1.0) if current_price else None
+        )
         total_value = round(net_shares * current_price, 2) if current_price else None
 
         # Price changes: DoD, MoM, 3M
@@ -253,15 +259,16 @@ class HoldingsModule(BaseModule):
             if shares <= 0:
                 continue
             try:
-                amount = round(float(div.cash_amount.split()[0]) * shares, 2)
+                per_share, currency = parse_money(div.cash_amount)
+                per_share_aed = per_share * self.fx.get(currency, 1.0)
                 records.append(
                     {
                         "date": div.pay_date.isoformat(),
                         "type": "DIVIDEND",
                         "shares": round(shares, 6),
-                        "price": _safe(float(div.cash_amount.split()[0])),
+                        "price": _safe(per_share_aed),
                         "commission": 0.0,
-                        "total": amount,
+                        "total": round(per_share_aed * shares, 2),
                     }
                 )
             except Exception:
@@ -581,10 +588,8 @@ class HoldingsModule(BaseModule):
             holdings = self.get_holdings(div.ex_date, [ticker], tx)
             shares = holdings.get(ticker, 0.0)
             if shares > 0:
-                try:
-                    total += float(div.cash_amount.split()[0]) * shares
-                except Exception:
-                    pass
+                amount, currency = parse_money(div.cash_amount)
+                total += amount * self.fx.get(currency, 1.0) * shares
         return total
 
     def _ticker_meta(self, ticker: str) -> dict:

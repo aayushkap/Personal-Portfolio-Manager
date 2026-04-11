@@ -10,16 +10,10 @@ import pandas as pd
 from app.core.logger import get_logger
 from app.services.base import BaseModule
 from app.services.filters import PortfolioFilters
-import math
+from app.utils.fin import parse_money, safe_float
 
 
 logger = get_logger()
-
-
-def _safe_float(v):
-    if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
-        return None
-    return v
 
 
 class OverviewModule(BaseModule):
@@ -88,14 +82,10 @@ class OverviewModule(BaseModule):
             }
         )
 
-        if "SMA" in overlays:
-            sma = self.get_portfolio_sma(filters)
-            trend_df["sma"] = sma.reindex(trading_days).round(2).values
-
         trend_df = trend_df.replace([float("inf"), float("-inf")], None)
 
         return [
-            {k: _safe_float(v) for k, v in row.items()}
+            {k: safe_float(v) for k, v in row.items()}
             for row in trend_df.to_dict(orient="records")
         ]
 
@@ -211,19 +201,18 @@ class OverviewModule(BaseModule):
             for div in self.get_dividends(ticker_key):
                 if not div.pay_date or not div.cash_amount:
                     continue
-                holdings = self.get_holdings(div.ex_date, [ticker_key], tx)
-                shares = holdings.get(ticker_key, 0.0)
-                if shares > 0:
-                    try:
-                        amount = float(div.cash_amount.split()[0]) * shares
-                        records.append(
-                            {
-                                "date": pd.Timestamp(div.pay_date, tz="Asia/Dubai"),
-                                "amount": amount,
-                            }
-                        )
-                    except Exception:
-                        pass
+                shares = self.get_holdings(div.ex_date, [ticker_key], tx).get(
+                    ticker_key, 0.0
+                )
+                if shares <= 0:
+                    continue
+                amount, currency = parse_money(div.cash_amount)
+                records.append(
+                    {
+                        "date": pd.Timestamp(div.pay_date, tz="Asia/Dubai"),
+                        "amount": amount * self.fx.get(currency, 1.0) * shares,
+                    }
+                )
 
         if not records:
             return pd.Series(0.0, index=trading_days)

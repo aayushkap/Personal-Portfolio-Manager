@@ -13,7 +13,8 @@ from app.data.cache import Cache
 from app.data.db import DB
 from app.data.schemas import DividendRow, PurchaseDetail, TickerCache
 from app.services.filters import PortfolioFilters
-
+from app.utils.fin import parse_money
+from app.data.fx import load_fx_rates
 
 logger = get_logger()
 
@@ -32,6 +33,13 @@ class BaseModule:
     def __init__(self, cache: Cache, db: DB) -> None:
         self._cache = cache
         self._db = db
+        self._fx: dict[str, float] | None = None
+
+    @property
+    def fx(self) -> dict[str, float]:
+        if self._fx is None:
+            self._fx = load_fx_rates()
+        return self._fx
 
     def get_ticker(self, ticker: str) -> Optional[TickerCache]:
         """Load and validate a ticker's full cache entry. Returns None if not found."""
@@ -63,25 +71,23 @@ class BaseModule:
         return data.purchase_details
 
     def get_all_transactions(self) -> pd.DataFrame:
-        """
-        Collect every purchase_detail across all cached tickers into one DataFrame.
-
-        Columns: ticker, action, trade_date, shares, price, commission,
-                 total_cost, signed_shares, platform, sector, exchange, logo_url
-        """
         rows = []
-
         for ticker_key in self.get_all_tickers():
             for detail in self.get_transactions(ticker_key):
+                total, currency = parse_money(detail.total_cost)
+                price, _ = parse_money(detail.cost_per_share)
+                commission, _ = parse_money(detail.commission_paid)
+                rate = self.fx.get(currency, 1.0)
                 rows.append(
                     {
                         "ticker": detail.ticker,
                         "action": detail.transaction.upper(),
                         "trade_date": detail.purchase_date,
                         "shares": detail.shares,
-                        "price": self._strip(detail.cost_per_share),
-                        "commission": self._strip(detail.commission_paid),
-                        "total_cost": self._strip(detail.total_cost),
+                        "price": price * rate,
+                        "commission": commission * rate,
+                        "total_cost": total * rate,
+                        "currency": currency,
                         "platform": detail.platform,
                         "sector": detail.sector,
                         "exchange": detail.exchange,
@@ -94,8 +100,7 @@ class BaseModule:
 
         df = pd.DataFrame(rows).sort_values("trade_date").reset_index(drop=True)
         df["signed_shares"] = df.apply(
-            lambda r: r["shares"] if r["action"] == "BUY" else -r["shares"],
-            axis=1,
+            lambda r: r["shares"] if r["action"] == "BUY" else -r["shares"], axis=1
         )
         return df
 
@@ -129,11 +134,8 @@ class BaseModule:
             return pd.DataFrame()
 
         combined = pd.concat(frames, axis=1).sort_index()
-
-        # If mixed intervals created duplicate columns, keep the daily bar (more data per day)
         combined = combined.loc[:, ~combined.columns.duplicated(keep="last")]
-
-        return combined
+        return combined.ffill().bfill()
 
     def get_latest_price(self, ticker: str) -> Optional[float]:
         """Most recent close price for a ticker. Returns None if unavailable."""
@@ -143,6 +145,18 @@ class BaseModule:
     def get_latest_prices(self, tickers: list[str]) -> dict[str, float]:
         """Latest close price for each ticker in the list."""
         return {t: p for t in tickers if (p := self.get_latest_price(t)) is not None}
+
+    def _prices_to_aed(self, prices: pd.DataFrame, tx: pd.DataFrame) -> pd.DataFrame:
+        ticker_currency = (
+            tx.drop_duplicates("ticker").set_index("ticker")["currency"].to_dict()
+            if "currency" in tx.columns
+            else {}
+        )
+        prices = prices.copy()
+        for ticker in prices.columns:
+            currency = ticker_currency.get(ticker, "AED")
+            prices[ticker] *= self.fx.get(currency, 1.0)
+        return prices
 
     def get_holdings(
         self,
@@ -180,34 +194,21 @@ class BaseModule:
             tx = tx[tx["ticker"].isin(filters.tickers)]
         return tx.copy()
 
-    @staticmethod
-    def _strip(value: Optional[str]) -> float:
-        """Parse 'AED 1,234.56' or '1234.56' into a float."""
-        if not value:
-            return 0.0
-        import re
-
-        cleaned = re.sub(r"[^\d.]", "", str(value))
-        return float(cleaned) if cleaned else 0.0
-
     def _total_dividends_received(
-        self,
-        tickers: list[str],
-        tx: pd.DataFrame,
-        as_of: date,
+        self, tickers: list[str], tx: pd.DataFrame, as_of: date
     ) -> float:
         total = 0.0
         for ticker_key in tickers:
             for div in self.get_dividends(ticker_key):
                 if not div.pay_date or div.pay_date > as_of or not div.cash_amount:
                     continue
-                holdings = self.get_holdings(div.ex_date, [ticker_key], tx)
-                shares = holdings.get(ticker_key, 0.0)
-                if shares > 0:
-                    try:
-                        total += float(div.cash_amount.split()[0]) * shares
-                    except Exception:
-                        pass
+                shares = self.get_holdings(div.ex_date, [ticker_key], tx).get(
+                    ticker_key, 0.0
+                )
+                if shares <= 0:
+                    continue
+                amount, currency = parse_money(div.cash_amount)
+                total += amount * self.fx.get(currency, 1.0) * shares
         return total
 
     def _holdings_matrix(
@@ -232,46 +233,3 @@ class BaseModule:
         )
 
         return pivot.reindex(trading_days, method="ffill").fillna(0).clip(lower=0)
-
-    def get_portfolio_price_series(self, filters: PortfolioFilters) -> pd.Series:
-        """
-        Daily total portfolio market value (price return only, no dividends).
-        Used as the base for SMA calculations and portfolio-level correlation.
-        """
-        tx = self.apply_filters(self.get_all_transactions(), filters)
-        if tx.empty:
-            return pd.Series(dtype=float)
-
-        tickers = tx["ticker"].unique().tolist()
-        prices = self.get_price_series(
-            tickers, filters.date_range.start, filters.date_range.end
-        )
-        if prices.empty:
-            return pd.Series(dtype=float)
-
-        trading_days = prices.index
-        holdings = self._holdings_matrix(tx, trading_days)
-        common = holdings.columns.intersection(prices.columns)
-
-        portfolio_value = (holdings[common] * prices[common]).sum(axis=1)
-        portfolio_value.name = "portfolio"
-        return portfolio_value
-
-    def get_portfolio_sma(
-        self, filters: PortfolioFilters, window: int = None
-    ) -> pd.Series:
-        """
-        SMA of portfolio market value. Window auto-derived from date range if not provided.
-        Rule: ~10% of trading period, floored at 5.
-        """
-        portfolio = self.get_portfolio_price_series(filters)
-        if portfolio.empty:
-            return pd.Series(dtype=float)
-
-        if window is None:
-            days = (filters.date_range.end - filters.date_range.start).days
-            window = max(5, days // 10)
-
-        sma = portfolio.rolling(window=window, min_periods=window).mean()
-        sma.name = f"sma_{window}"
-        return sma

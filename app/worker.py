@@ -11,8 +11,17 @@ from app.scraper.ohlc import _set_ohlc
 from app.scraper.sa import StockAnalysisScraper
 from app.data.gsheet import GSheet_Manager
 from app.data.cache import Cache
+from app.data.fx import fetch_and_save_fx
 
 logger = get_logger()
+
+
+async def fx_job():
+    logger.info("FX job starting")
+    try:
+        await fetch_and_save_fx()
+    except Exception:
+        logger.exception("FX job failed")
 
 
 async def ohlc_job(bars: int = 100):
@@ -111,8 +120,20 @@ async def main():
         misfire_grace_time=300,
     )
 
+    scheduler.add_job(
+        fx_job,
+        "cron",
+        day_of_week="mon-fri",
+        hour=6,
+        minute=0,
+        id="fx_daily",
+        max_instances=1,
+        misfire_grace_time=300,
+    )
+
     scheduler.start()
-    # await fundamentals_job()
+    await fundamentals_job()
+    await fx_job()
     await ohlc_job(bars=1000)
 
     try:

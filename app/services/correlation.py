@@ -10,7 +10,6 @@ import pandas as pd
 
 from app.core.logger import get_logger
 from app.services.base import BaseModule
-from app.api.schema import PortfolioFilters, DateRange
 import math
 
 logger = get_logger()
@@ -59,9 +58,7 @@ class CorrelationModule(BaseModule):
 
         end = date.today()
         start = end - timedelta(days=_LOOKBACK_DAYS[period])
-        filters = PortfolioFilters(date_range=DateRange(start=start, end=end))
 
-        include_portfolio = self._PORTFOLIO_KEY in tickers
         real_tickers = [t for t in tickers if t != self._PORTFOLIO_KEY]
 
         # Fetch instrument prices
@@ -70,20 +67,6 @@ class CorrelationModule(BaseModule):
             if real_tickers
             else pd.DataFrame()
         )
-
-        # Inject portfolio as a column BEFORE any processing
-        if include_portfolio:
-            portfolio = self.get_portfolio_price_series(filters)
-            if portfolio.empty:
-                logger.warning(
-                    "Portfolio price series is empty — check holdings and OHLC data"
-                )
-            else:
-                prices = (
-                    pd.concat([prices, portfolio], axis=1)
-                    if not prices.empty
-                    else portfolio.to_frame()
-                )
 
         if prices.empty:
             return {"error": "No price data found."}

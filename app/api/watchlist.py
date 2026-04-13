@@ -6,7 +6,7 @@ from app.api.deps import get_watchlist_module
 from app.data.gsheet import GSheet_Manager
 from app.services.watchlist import WatchlistModule
 
-router = APIRouter(prefix="/watchlist", tags=["watchlist"])
+router = APIRouter(prefix="/watchlist", tags=["Watchlist"])
 
 
 @router.get("/")

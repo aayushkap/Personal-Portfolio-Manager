@@ -51,6 +51,11 @@ class PortfolioFilters:
     tickers: Optional[list[str]] = None  # None = all current holdings
     overlays: Optional[list[str]] = None
 
+    def __post_init__(self):
+        if self.date_range.start and self.date_range.end:
+            if self.date_range.start == self.date_range.end:
+                self.date_range.start -= timedelta(days=7)
+
     # Preset constructors
     @classmethod
     def default(cls) -> "PortfolioFilters":

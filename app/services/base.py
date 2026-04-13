@@ -233,3 +233,24 @@ class BaseModule:
         )
 
         return pivot.reindex(trading_days, method="ffill").fillna(0).clip(lower=0)
+
+    def get_portfolio_price_series(self, filters: PortfolioFilters) -> pd.Series:
+        """Total portfolio market value per trading day (price return only, no dividends)."""
+        tx = self.apply_filters(self.get_all_transactions(), filters)
+        if tx.empty:
+            return pd.Series(dtype=float)
+
+        tickers = tx["ticker"].unique().tolist()
+        prices = self.get_price_series(
+            tickers, filters.date_range.start, filters.date_range.end
+        )
+        if prices.empty:
+            return pd.Series(dtype=float)
+
+        trading_days = prices.index
+        holdings = self._holdings_matrix(tx, trading_days)
+        common = holdings.columns.intersection(prices.columns)
+
+        portfolio = (holdings[common] * prices[common]).sum(axis=1)
+        portfolio.name = "PORTFOLIO"
+        return portfolio

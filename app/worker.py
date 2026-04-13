@@ -53,7 +53,7 @@ async def fundamentals_job():
     logger.info("Fundamentals job starting | now=%s", dubai_now().isoformat())
     try:
         gs = GSheet_Manager()
-        transactions = []  # gs.fetch_transactions()
+        transactions = gs.fetch_transactions()  #
         watchlist = gs.fetch_watchlist()
 
         # Group transactions by canonical key, watchlist items have no purchases
@@ -132,9 +132,9 @@ async def main():
     )
 
     scheduler.start()
-    await fundamentals_job()
-    await fx_job()
-    await ohlc_job(bars=1000)
+    # await fundamentals_job()
+    # await fx_job()
+    # await ohlc_job(bars=2500)
 
     try:
         while True:

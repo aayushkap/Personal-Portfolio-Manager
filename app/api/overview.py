@@ -9,26 +9,6 @@ from app.services.filters import PortfolioFilters, DateRange
 router = APIRouter(prefix="/overview", tags=["Overview"])
 
 
-@router.get("/metadata")
-async def get_metadata(module: OverviewModule = Depends(get_overview_module)):
-    tx = module.get_all_transactions()
-
-    if tx.empty:
-        return {
-            "sectors": [],
-            "instruments": [],
-            "first_investment_date": None,
-            "available_overlays": ["SMA", "PORTFOLIO"],
-        }
-
-    return {
-        "sectors": sorted(tx["sector"].dropna().unique().tolist()),
-        "instruments": sorted(tx["ticker"].unique().tolist()),
-        "first_investment_date": tx["trade_date"].min().isoformat(),
-        "available_overlays": ["SMA", "PORTFOLIO"],
-    }
-
-
 @router.post("")
 async def get_overview(
     body: PerformanceRequest,

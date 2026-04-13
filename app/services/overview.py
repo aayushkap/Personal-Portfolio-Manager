@@ -11,6 +11,7 @@ from app.core.logger import get_logger
 from app.services.base import BaseModule
 from app.services.filters import PortfolioFilters
 from app.utils.fin import parse_money, safe_float
+from app.services.overlays import OverlayResolver
 
 
 logger = get_logger()
@@ -83,6 +84,18 @@ class OverviewModule(BaseModule):
         )
 
         trend_df = trend_df.replace([float("inf"), float("-inf")], None)
+
+        if filters.overlays:
+            resolved = OverlayResolver(self).resolve_many(filters.overlays, filters)
+            for key, records in resolved.items():
+                values = pd.Series(
+                    [r["value"] for r in records],
+                    index=pd.DatetimeIndex([r["date"] for r in records]).tz_localize(
+                        "Asia/Dubai"
+                    ),
+                    name=key,
+                )
+                trend_df[key.lower()] = values.reindex(trading_days).values
 
         return [
             {k: safe_float(v) for k, v in row.items()}

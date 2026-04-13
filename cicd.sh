@@ -56,7 +56,7 @@ echo "[INFO] Virtual environment activated."
 # --- Start app with nohup ---
 echo "[INFO] Starting Uvicorn (detached)..."
 
-nohup uvicorn api:app --host 0.0.0.0 --port 8000 > "$LOG_FILE" 2>&1 &
+nohup "$VENV_DIR/bin/python" -m uvicorn app.api:app --host 0.0.0.0 --port 8000 > "$LOG_FILE" 2>&1 &
 
 disown
 

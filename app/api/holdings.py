@@ -14,22 +14,25 @@ router = APIRouter(prefix="/holdings", tags=["Holdings"])
 @router.get("/")
 def list_holdings(
     sectors: Optional[str] = Query(None, description="Comma-separated sectors"),
-    exchanges: Optional[str] = Query(None, description="Comma-separated exchanges"),
-    tickers: Optional[str] = Query(None, description="Comma-separated tickers"),
+    search: Optional[str] = Query(None, description="Search by ticker or company name"),
     module: HoldingsModule = Depends(get_holdings_module),
 ):
-    """
-    Returns all active holding cards.
-    Each card includes: name, sector, exchange, shares, cost basis,
-    market value, total return, DoD/MoM/3M %, YoC, sparkline (1M).
-    """
+    sectors_list = sectors.split(",") if sectors else []
     filters = PortfolioFilters(
         date_range=DateRange(start=date(2000, 1, 1), end=date.today()),
-        sectors=sectors.split(",") if sectors else [],
-        exchanges=exchanges.split(",") if exchanges else [],
-        tickers=tickers.split(",") if tickers else [],
+        sectors=[sec.title() for sec in sectors_list],
     )
-    return module.get_holdings_list(filters)
+    results = module.get_holdings_list(filters)
+
+    if search:
+        q = search.lower()
+        results = [
+            r
+            for r in results
+            if q in r.get("ticker", "").lower() or q in r.get("name", "").lower()
+        ]
+
+    return results
 
 
 @router.get("/{ticker}")

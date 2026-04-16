@@ -246,21 +246,28 @@ class AnalyticsModule(BaseModule):
         total_received = sum(e["amount"] for e in events if e["status"] == "received")
         yoc_alltime = round(total_received / total_cost * 100, 2) if total_cost else 0.0
 
-        # Trailing 12M YoC: divs received in last 365 days / cost basis as of a year ago
+        # Trailing 12M YoC:
+        # dividends received in last 365 days / total invested in last 365 days
         one_year_ago = today - timedelta(days=365)
+
         trailing_divs = sum(
             e["amount"]
             for e in events
             if e["status"] == "received"
             and e["pay_date"]
-            and e["pay_date"] >= one_year_ago.isoformat()
+            and one_year_ago <= pd.to_datetime(e["pay_date"]).date() <= today
         )
-        cost_1y_ago = tx[
+
+        invested_last_12m = tx[
             (tx["action"] == "BUY")
-            & (pd.to_datetime(tx["trade_date"]).dt.date <= one_year_ago)
+            & (pd.to_datetime(tx["trade_date"]).dt.date >= one_year_ago)
+            & (pd.to_datetime(tx["trade_date"]).dt.date <= today)
         ]["total_cost"].sum()
+
         yoc_trailing_12m = (
-            round(trailing_divs / cost_1y_ago * 100, 2) if cost_1y_ago else 0.0
+            round(trailing_divs / invested_last_12m * 100, 2)
+            if invested_last_12m
+            else 0.0
         )
 
         events.sort(key=lambda x: x["pay_date"] or x["ex_date"] or "")

@@ -4,13 +4,15 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from typing import Literal
+import math
 
 import numpy as np
 import pandas as pd
 
 from app.core.logger import get_logger
 from app.services.base import BaseModule
-import math
+from app.services.filters import PortfolioFilters, DateRange
+from app.services.overlays import OverlayResolver, OVERLAY_CATALOGUE
 
 logger = get_logger()
 
@@ -38,9 +40,9 @@ def _safe(v):
 
 class CorrelationModule(BaseModule):
     """
-    Pearson correlation matrix on log returns for a set of instruments.
+    Pearson correlation matrix on log returns for a set of instruments and overlays.
 
-    get_matrix(tickers, period) : {
+    get_matrix(items, period) : {
         period:    "1y",
         start:     "2025-04-07",
         end:       "2026-04-07",
@@ -50,16 +52,16 @@ class CorrelationModule(BaseModule):
     }
     """
 
-    _PORTFOLIO_KEY = "PORTFOLIO"
-
-    def get_matrix(self, tickers: list[str], period: Period = "1y") -> dict:
-        if len(tickers) < 2:
-            return {"error": "At least 2 instruments required."}
+    def get_matrix(self, items: list[str], period: Period = "1y") -> dict:
+        if len(items) < 2:
+            return {"error": "At least 2 instruments or overlays required."}
 
         end = date.today()
         start = end - timedelta(days=_LOOKBACK_DAYS[period])
 
-        real_tickers = [t for t in tickers if t != self._PORTFOLIO_KEY]
+        # Separate regular tickers from overlays
+        overlay_keys = [t for t in items if t.upper() in OVERLAY_CATALOGUE]
+        real_tickers = [t for t in items if t.upper() not in OVERLAY_CATALOGUE]
 
         # Fetch instrument prices
         prices = (
@@ -68,19 +70,60 @@ class CorrelationModule(BaseModule):
             else pd.DataFrame()
         )
 
+        # Fetch overlays
+        if overlay_keys:
+            resolver = OverlayResolver(self)
+            # Create a basic filter for the requested period to pass to the resolver
+            filters = PortfolioFilters(date_range=DateRange(start=start, end=end))
+
+            overlay_series = []
+            for key in overlay_keys:
+                s = resolver.resolve(key, filters)
+                if not s.empty:
+                    # Strip the timezone but keep it as a pandas DatetimeIndex
+                    s.index = pd.to_datetime(s.index).tz_localize(None).normalize()
+                    overlay_series.append(s)
+
+            if overlay_series:
+                overlays_df = pd.concat(overlay_series, axis=1)
+                # overlays already have tz stripped above
+
+                if not prices.empty:
+                    # prices index is tz-aware Asia/Dubai — strip it to match overlays
+                    prices.index = (
+                        pd.to_datetime(prices.index).tz_localize(None)
+                        if prices.index.tz is None
+                        else pd.to_datetime(prices.index)
+                        .tz_convert("Asia/Dubai")
+                        .tz_localize(None)
+                    )
+                    prices.index = prices.index.normalize()
+                    prices = prices.join(overlays_df, how="outer")
+                else:
+                    prices = overlays_df
+
         if prices.empty:
-            return {"error": "No price data found."}
+            return {"error": "No price or overlay data found."}
 
         prices = prices.dropna(axis=1, how="all")
         found = prices.columns.tolist()
-        missing = [t for t in tickers if t not in found]
+        missing = [t for t in items if t not in found]
 
         if missing:
             logger.warning("No data for: %s", missing)
         if len(found) < 2:
             return {"error": f"Insufficient data. Missing: {missing}"}
 
-        log_returns = np.log(prices / prices.shift(1)).dropna(how="all")
+        # Calculate log returns
+        # Handle zero or negative values in overlays (like DART or TWR when starting)
+        # Shift values up by min + 1 if there are <= 0 values to allow log calc,
+        # or just use simple returns for items that can go negative.
+        returns = prices / prices.shift(1)
+
+        # Safe log: mask out <= 0 values before taking log to avoid warnings/NaNs
+        returns = returns.mask(returns <= 0)
+        log_returns = np.log(returns).dropna(how="all")
+
         ticker_trend = {t: self._trend(log_returns[t].dropna()) for t in found}
 
         matrix = []

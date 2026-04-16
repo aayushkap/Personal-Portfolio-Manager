@@ -29,6 +29,10 @@ async def ohlc_job(bars: int = 100):
     try:
         gs = GSheet_Manager()
         tickers = gs.fetch_transactions() + gs.fetch_watchlist()
+        tickers.append(app.config.BENCHMARKS)
+
+        benchmark_list = [{"ticker": k, **v} for k, v in app.config.BENCHMARKS.items()]
+        tickers += benchmark_list
 
         seen = set()
         for t in tickers:
@@ -39,7 +43,6 @@ async def ohlc_job(bars: int = 100):
             try:
                 await _set_ohlc(
                     tv_exchange=t["exchange"],
-                    sa_exchange=t["sa_exchange"],
                     symbol=t["symbol"],
                     bars=bars,
                 )
@@ -134,7 +137,7 @@ async def main():
     scheduler.start()
     # await fundamentals_job()
     # await fx_job()
-    # await ohlc_job(bars=2500)
+    await ohlc_job(bars=2000)
 
     try:
         while True:

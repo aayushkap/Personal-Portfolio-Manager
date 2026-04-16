@@ -54,7 +54,7 @@ class PortfolioFilters:
     def __post_init__(self):
         if self.date_range.start and self.date_range.end:
             if self.date_range.start == self.date_range.end:
-                self.date_range.start -= timedelta(days=7)
+                self.date_range.start -= timedelta(days=14)
 
     # Preset constructors
     @classmethod

@@ -12,7 +12,6 @@ logger = get_logger()
 
 async def _set_ohlc(
     tv_exchange: str,
-    sa_exchange: str,  # kept for future use
     symbol: str,
     interval=Interval.in_15_minute,
     bars: int = 100,
@@ -21,13 +20,14 @@ async def _set_ohlc(
 ):
     loop = asyncio.get_running_loop()
     storage_key = f"{tv_exchange}:{symbol}"
+
     for attempt in range(1, max_retries + 1):
         try:
             df = await loop.run_in_executor(
                 None,
                 lambda: TvDatafeed().get_hist(
                     symbol=symbol,
-                    exchange=tv_exchange,  # TV always uses tv_exchange
+                    exchange=tv_exchange,
                     interval=interval,
                     n_bars=bars,
                 ),
@@ -35,10 +35,21 @@ async def _set_ohlc(
 
             if df is not None and not df.empty:
                 df = df.reset_index().rename(columns={"index": "datetime"})
-                dt = pd.to_datetime(df["datetime"], errors="coerce").dt.tz_localize(
-                    "Asia/Dubai"
+
+                # TvDatafeed returns UTC — localize as UTC then convert to Dubai
+                dt = pd.to_datetime(df["datetime"], errors="coerce")
+
+                # If it's a naive datetime (it is), just tag it as Dubai time directly.
+                if dt.dt.tz is None:
+                    dt = dt.dt.tz_localize(
+                        "Asia/Dubai", ambiguous="NaT", nonexistent="NaT"
+                    )
+                else:
+                    dt = dt.dt.tz_convert("Asia/Dubai")
+
+                df["datetime"] = dt.apply(
+                    lambda ts: ts.isoformat() if pd.notna(ts) else None
                 )
-                df["datetime"] = dt.apply(lambda ts: ts.isoformat())
 
                 DB().upsert_many(
                     [
@@ -51,8 +62,10 @@ async def _set_ohlc(
                         for row in df[["datetime", "close", "volume"]].to_dict(
                             orient="records"
                         )
+                        if row["datetime"]
                     ]
                 )
+
                 logger.info("%s — upserted %d bars", storage_key, len(df))
                 return
 

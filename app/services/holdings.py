@@ -92,7 +92,7 @@ class HoldingsModule(BaseModule):
         ticker_currency = (
             ticker_tx.iloc[0]["currency"] if "currency" in ticker_tx.columns else "AED"
         )
-        raw_price = self.get_latest_price(ticker)
+        # raw_price = self.get_latest_price(ticker)
         current_price = self.get_latest_price(ticker)
         ticker_currency = (
             ticker_tx.iloc[0]["currency"] if "currency" in ticker_tx.columns else "AED"

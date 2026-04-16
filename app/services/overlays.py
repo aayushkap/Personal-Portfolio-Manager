@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-from datetime import date
 from typing import Callable
 
-import numpy as np
 import pandas as pd
 
 from app.core.logger import get_logger
+from app.config import BENCHMARKS
 from app.services.base import BaseModule
 from app.services.filters import DateRange, PortfolioFilters
+from app.utils.fin import parse_money
 
 logger = get_logger()
 
@@ -20,6 +20,8 @@ OVERLAY_CATALOGUE: dict[str, str] = {
     "SMA": "Simple Moving Average (portfolio value)",
     "PORTFOLIO_VALUE": "Total Portfolio Market Value",
     "TWR": "Time-Weighted Return (%)",
+    "DART": "Dividend-Adjusted Return Trajectory (AED)",
+    **{k: v["label"] for k, v in BENCHMARKS.items()},
 }
 
 
@@ -41,7 +43,11 @@ class OverlayResolver:
             "SMA": self._sma,
             "PORTFOLIO_VALUE": self._portfolio_value,
             "TWR": self._twr,
+            "DART": self._dart,
         }
+
+        for ticker_key, meta in BENCHMARKS.items():
+            self._map[ticker_key] = self._make_benchmark_resolver(ticker_key)
 
     def resolve(self, key: str, filters: PortfolioFilters) -> pd.Series:
         fn = self._map.get(key.upper())
@@ -54,6 +60,24 @@ class OverlayResolver:
             logger.error("Overlay %s failed: %s", key, exc)
             return pd.Series(dtype=float, name=key)
 
+    def _make_benchmark_resolver(
+        self, ticker: str
+    ) -> Callable[[PortfolioFilters], pd.Series]:
+        """Returns a resolver function for a benchmark ticker."""
+
+        def _resolve(filters: PortfolioFilters) -> pd.Series:
+            prices = self._base.get_prices(
+                ticker,
+                filters.date_range.start,
+                filters.date_range.end,
+            )
+            if prices.empty:
+                return pd.Series(dtype=float, name=ticker)
+            # get_prices returns a DataFrame with one column named `ticker`
+            return prices[ticker].rename(ticker)
+
+        return _resolve
+
     def resolve_many(
         self,
         keys: list[str],
@@ -64,7 +88,7 @@ class OverlayResolver:
 
     @staticmethod
     def catalogue() -> list[dict]:
-        return [{"key": k, "label": v} for k, v in OVERLAY_CATALOGUE.items()]
+        return [k for k, v in OVERLAY_CATALOGUE.items()]
 
     # Implementations
     def _portfolio_value(self, filters: PortfolioFilters) -> pd.Series:
@@ -147,6 +171,51 @@ class OverlayResolver:
         twr_aed = window_start_val * (1 + twr_window / 100)
 
         return twr_aed.rename("TWR")
+
+    def _dart(self, filters: PortfolioFilters) -> pd.Series:
+        twr = self._twr(filters)
+        if twr.empty:
+            return pd.Series(dtype=float, name="DART")
+
+        tx = self._base.apply_filters(self._base.get_all_transactions(), filters).copy()
+        if tx.empty:
+            return twr.rename("DART")
+
+        tickers = tx["ticker"].unique().tolist()
+        trading_days = twr.index  # tz-aware Asia/Dubai DatetimeIndex
+
+        # Build a daily dividend series over the TWR window
+        div_rows = []
+        for ticker_key in tickers:
+            for div in self._base.get_dividends(ticker_key):
+                if not div.pay_date or not div.cash_amount:
+                    continue
+                # Shares held on ex_date determines how much you received
+                shares = self._base.get_holdings(div.ex_date, [ticker_key], tx).get(
+                    ticker_key, 0.0
+                )
+                if shares <= 0:
+                    continue
+                amount, currency = parse_money(div.cash_amount)
+                aed_amount = amount * self._base.fx.get(currency, 1.0) * shares
+                div_rows.append({"pay_date": div.pay_date, "amount": aed_amount})
+
+        if not div_rows:
+            return twr.rename("DART")
+
+        div_df = pd.DataFrame(div_rows)
+        div_df["ts"] = (
+            pd.to_datetime(div_df["pay_date"])
+            .dt.tz_localize("Asia/Dubai")
+            .dt.normalize()
+        )
+
+        daily_divs = (
+            div_df.groupby("ts")["amount"].sum().reindex(trading_days, fill_value=0.0)
+        )
+
+        dart = (twr + daily_divs.cumsum()).combine_first(twr)
+        return dart.rename("DART")
 
 
 # Utility

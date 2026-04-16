@@ -13,6 +13,7 @@ from app.core.logger import get_logger
 from app.services.base import BaseModule
 from app.services.filters import PortfolioFilters, DateRange
 from app.services.overlays import OverlayResolver, OVERLAY_CATALOGUE
+from scipy import stats
 
 logger = get_logger()
 
@@ -52,7 +53,12 @@ class CorrelationModule(BaseModule):
     }
     """
 
-    def get_matrix(self, items: list[str], period: Period = "1y") -> dict:
+    def get_matrix(
+        self,
+        items: list[str],
+        period: Period = "1y",
+        mode: Literal["pearson", "regression"] = "pearson",
+    ) -> dict:
         if len(items) < 2:
             return {"error": "At least 2 instruments or overlays required."}
 
@@ -138,6 +144,18 @@ class CorrelationModule(BaseModule):
                 )
                 ta, tb = ticker_trend[a], ticker_trend[b]
 
+                # Regression: regress b on a (a = "market", b = "asset")
+                beta = alpha_val = r_squared = p_value = std_err = None
+                if mode == "regression" and n >= _MIN_OBSERVATIONS:
+                    slope, intercept, r, p, se = stats.linregress(pair[a], pair[b])
+                    beta = _safe(round(float(slope), 4))
+                    alpha_val = _safe(
+                        round(float(intercept), 6)
+                    )  # daily alpha in log return
+                    r_squared = _safe(round(float(r**2), 4))
+                    p_value = _safe(round(float(p), 4))
+                    std_err = _safe(round(float(se), 6))
+
                 matrix.append(
                     {
                         "ticker_a": a,
@@ -152,6 +170,12 @@ class CorrelationModule(BaseModule):
                         "co_movement": _co_movement(
                             corr, ta["direction"], tb["direction"]
                         ),
+                        # Regression fields — null when mode="pearson"
+                        "beta": beta,
+                        "alpha": alpha_val,
+                        "r_squared": r_squared,
+                        "p_value": p_value,
+                        "std_err": std_err,
                     }
                 )
 

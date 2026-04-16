@@ -137,7 +137,7 @@ async def main():
     scheduler.start()
     # await fundamentals_job()
     # await fx_job()
-    await ohlc_job(bars=2000)
+    await ohlc_job(bars=200)
 
     try:
         while True:

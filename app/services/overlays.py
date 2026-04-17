@@ -21,6 +21,8 @@ OVERLAY_CATALOGUE: dict[str, str] = {
     "PORTFOLIO_VALUE": "Total Portfolio Market Value",
     "TWR": "Time-Weighted Return (%)",
     "DART": "Dividend-Adjusted Return Trajectory (AED)",
+    "COMPOUND_4": "Expected Growth at 4% Annual (Compounded Daily)",
+    "COMPOUND_8": "Expected Growth at 8% Annual (Compounded Daily)",
     **{k: v["label"] for k, v in BENCHMARKS.items()},
 }
 
@@ -44,6 +46,8 @@ class OverlayResolver:
             "PORTFOLIO_VALUE": self._portfolio_value,
             "TWR": self._twr,
             "DART": self._dart,
+            "COMPOUND_4": self._compound_4,
+            "COMPOUND_8": self._compound_8,
         }
 
         for ticker_key, meta in BENCHMARKS.items():
@@ -216,6 +220,63 @@ class OverlayResolver:
 
         dart = (twr + daily_divs.cumsum()).combine_first(twr)
         return dart.rename("DART")
+
+    def _compound_4(self, filters: PortfolioFilters) -> pd.Series:
+        """
+        Theoretical portfolio value if every deposit compounded at 4% annually.
+        Steps up on each actual cash deposit, compounds daily from that deposit's date.
+        Useful as a 'lazy money' baseline — am I beating a savings account?
+        """
+        return self._compound_at_rate(filters, annual_rate=0.04, name="COMPOUND_4")
+
+    def _compound_8(self, filters: PortfolioFilters) -> pd.Series:
+        """
+        Theoretical portfolio value if every deposit compounded at 8% annually.
+        Steps up on each actual cash deposit, compounds daily from that deposit's date.
+        Useful as a 'lazy money' baseline — am I beating a savings account?
+        """
+        return self._compound_at_rate(filters, annual_rate=0.08, name="COMPOUND_8")
+
+    def _compound_at_rate(
+        self, filters: PortfolioFilters, annual_rate: float, name: str
+    ) -> pd.Series:
+        tx = self._base.apply_filters(self._base.get_all_transactions(), filters).copy()
+        if tx.empty:
+            return pd.Series(dtype=float, name=name)
+
+        # Build the trading day index from actual price data
+        tickers = tx["ticker"].unique().tolist()
+        prices = self._base.get_price_series(
+            tickers, filters.date_range.start, filters.date_range.end
+        )
+        if prices.empty:
+            return pd.Series(dtype=float, name=name)
+
+        trading_days = prices.index  # tz-aware Asia/Dubai DatetimeIndex
+
+        # Only BUY transactions contribute cash inflows
+        buys = tx[tx["action"] == "BUY"].copy()
+        buys["ts"] = (
+            pd.to_datetime(buys["trade_date"])
+            .dt.tz_localize("Asia/Dubai")
+            .dt.normalize()
+        )
+        # Aggregate total cost per deposit date (multiple buys same day = one deposit)
+        deposits = buys.groupby("ts")["total_cost"].sum()
+
+        # For each trading day, sum the compounded value of every prior deposit
+        daily_rate = annual_rate / 365.0
+        result = pd.Series(0.0, index=trading_days, name=name)
+
+        for day in trading_days:
+            total = 0.0
+            for deposit_date, amount in deposits.items():
+                if deposit_date <= day:
+                    days_held = (day - deposit_date).days
+                    total += amount * ((1 + daily_rate) ** days_held)
+            result[day] = total
+
+        return result
 
 
 # Utility

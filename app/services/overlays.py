@@ -5,12 +5,14 @@ from __future__ import annotations
 from typing import Callable
 
 import pandas as pd
+from scipy.optimize import brentq
 
 from app.core.logger import get_logger
 from app.config import BENCHMARKS
 from app.services.base import BaseModule
 from app.services.filters import DateRange, PortfolioFilters
 from app.utils.fin import parse_money
+
 
 logger = get_logger()
 
@@ -23,6 +25,7 @@ OVERLAY_CATALOGUE: dict[str, str] = {
     "DART": "Dividend-Adjusted Return Trajectory (AED)",
     "COMPOUND_4": "Expected Growth at 4% Annual (Compounded Daily)",
     "COMPOUND_8": "Expected Growth at 8% Annual (Compounded Daily)",
+    "XIRR": "If Money Is Growing at Target Rate (Including Deposits)",
     **{k: v["label"] for k, v in BENCHMARKS.items()},
 }
 
@@ -48,6 +51,7 @@ class OverlayResolver:
             "DART": self._dart,
             "COMPOUND_4": self._compound_4,
             "COMPOUND_8": self._compound_8,
+            "XIRR": self._xirr_series,
         }
 
         for ticker_key, meta in BENCHMARKS.items():
@@ -275,6 +279,66 @@ class OverlayResolver:
                     days_held = (day - deposit_date).days
                     total += amount * ((1 + daily_rate) ** days_held)
             result[day] = total
+
+        return result
+
+    def _xirr_series(self, filters: PortfolioFilters) -> pd.Series:
+        tx = self._base.apply_filters(self._base.get_all_transactions(), filters).copy()
+        if tx.empty:
+            return pd.Series(dtype=float, name="XIRR")
+
+        def _solve_xirr(dated_flows: list[tuple]) -> float | None:
+            if len(dated_flows) < 2:
+                return None
+            t0 = dated_flows[0][0]
+
+            def npv(rate):
+                return sum(
+                    cf / (1 + rate) ** ((d - t0).days / 365) for d, cf in dated_flows
+                )
+
+            try:
+                return round(brentq(npv, -0.9999, 100.0) * 100, 2)
+            except ValueError:
+                return None
+
+        tickers = tx["ticker"].unique().tolist()
+        prices = self._base.get_price_series(
+            tickers, filters.date_range.start, filters.date_range.end
+        )
+        if prices.empty:
+            return pd.Series(dtype=float, name="XIRR")
+
+        trading_days = prices.index
+        holdings = self._base._holdings_matrix(tx, trading_days)
+        common = holdings.columns.intersection(prices.columns)
+        portfolio_mv = (holdings[common] * prices[common]).sum(axis=1)
+
+        # Build list of (date, cash_flow) — negative = money in, positive = money out
+        tx["ts"] = (
+            pd.to_datetime(tx["trade_date"]).dt.tz_localize("Asia/Dubai").dt.normalize()
+        )
+        cash_flow_series = (
+            tx.groupby("ts")
+            .apply(
+                lambda g: -g.loc[g["action"] == "BUY", "total_cost"].sum()
+                + g.loc[g["action"] == "SELL", "total_cost"].sum()
+            )
+            .sort_index()
+        )
+
+        result = pd.Series(dtype=float, index=trading_days, name="XIRR")
+
+        for day in trading_days:
+            # All cash flows up to and including this day
+            flows = cash_flow_series[cash_flow_series.index <= day].items()
+            dated_flows = [(d, v) for d, v in flows]
+
+            # Add today's portfolio value as the "exit"
+            dated_flows.append((day, portfolio_mv[day]))
+
+            xirr_val = _solve_xirr(dated_flows)
+            result[day] = xirr_val
 
         return result
 

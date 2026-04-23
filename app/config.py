@@ -30,13 +30,13 @@ BENCHMARKS: dict[str, dict] = {
         "symbol": "DFMREI",
         "type": "index",
     },
-    "TVUS05Y": {
+    "TVC:US05Y": {
         "label": "US Government Bonds 5 YR Yield",
         "exchange": "TVC",
         "symbol": "US05Y",
         "type": "index",
     },
-    "TVUS10Y": {
+    "TVC:US10Y": {
         "label": "US Government Bonds 10 YR Yield",
         "exchange": "TVC",
         "symbol": "US10Y",

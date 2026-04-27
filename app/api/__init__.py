@@ -13,6 +13,7 @@ from app.api.correlation import router as correlation
 from app.api.holdings import router as holdings
 from app.api.watchlist import router as watchlist
 from app.api.metadata import router as metadata
+from app.api.quote import router as quote
 
 load_dotenv()
 
@@ -30,6 +31,7 @@ app.include_router(correlation)
 app.include_router(holdings)
 app.include_router(watchlist)
 app.include_router(metadata)
+app.include_router(quote)
 
 app.add_middleware(
     CORSMiddleware,

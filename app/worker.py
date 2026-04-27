@@ -12,6 +12,7 @@ from app.scraper.sa import StockAnalysisScraper
 from app.data.gsheet import GSheet_Manager
 from app.data.cache import Cache
 from app.data.fx import fetch_and_save_fx
+from app.services.quote import QuoteStore
 
 logger = get_logger()
 
@@ -22,6 +23,11 @@ async def fx_job():
         await fetch_and_save_fx()
     except Exception:
         logger.exception("FX job failed")
+
+
+async def quote_job():
+    store = QuoteStore()
+    store.write()
 
 
 async def ohlc_job(bars: int = 100):
@@ -134,10 +140,23 @@ async def main():
         misfire_grace_time=300,
     )
 
+    scheduler.add_job(
+        quote_job,
+        "cron",
+        day_of_week="mon",
+        hour=0,
+        minute=0,
+        id="quote_daily",
+        max_instances=1,
+        misfire_grace_time=300,
+    )
+
+    await quote_job()
+
     scheduler.start()
     # await fundamentals_job()
     # await fx_job()
-    await ohlc_job(bars=200)
+    # await ohlc_job(bars=200)
 
     try:
         while True:

@@ -110,15 +110,8 @@ class WatchlistModule(BaseModule):
 
     def _next_dividend(self, ticker: str) -> tuple[Optional[str], Optional[str]]:
         today = date.today()
-        upcoming = [
-            d for d in self.get_dividends(ticker) if d.ex_date and d.ex_date >= today
-        ]
-        if not upcoming:
-            return None, None
 
-        nxt = min(upcoming, key=lambda d: d.ex_date)
-
-        # Yield from statistics if available
+        # 1. Get the yield from statistics first (always do this)
         div_yield = None
         data = self.get_ticker(ticker)
         if data and data.statistics and data.statistics.sections:
@@ -131,7 +124,18 @@ class WatchlistModule(BaseModule):
                     else None
                 )
 
-        return nxt.ex_date.isoformat(), div_yield
+        # 2. Check for an upcoming ex-date
+        upcoming = [
+            d for d in self.get_dividends(ticker) if d.ex_date and d.ex_date >= today
+        ]
+
+        nxt_date = None
+        if upcoming:
+            nxt = min(upcoming, key=lambda d: d.ex_date)
+            nxt_date = nxt.ex_date.isoformat()
+
+        # Return whatever we found for both
+        return nxt_date, div_yield
 
     def _ticker_meta(self, ticker: str) -> dict:
         data = self.get_ticker(ticker)

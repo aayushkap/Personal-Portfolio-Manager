@@ -151,12 +151,12 @@ async def main():
         misfire_grace_time=300,
     )
 
-    await quote_job()
+    # await quote_job()
 
     scheduler.start()
     # await fundamentals_job()
     # await fx_job()
-    # await ohlc_job(bars=200)
+    await ohlc_job(bars=2000)
 
     try:
         while True:

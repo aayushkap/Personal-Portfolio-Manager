@@ -9,7 +9,7 @@ import re
 from typing import Dict, Any
 from dateutil import parser
 from playwright.async_api import async_playwright, Browser, Page, BrowserContext
-from playwright_stealth import stealth
+from playwright_stealth import Stealth
 from app.utils.time_utils import dubai_now_iso
 
 from app.core.logger import get_logger
@@ -128,6 +128,8 @@ class StockAnalysisScraper:
             },
         )
 
+        await Stealth().apply_stealth_async(context)
+
         # Spoof additional fingerprint signals
         await context.add_init_script(
             """
@@ -139,6 +141,7 @@ class StockAnalysisScraper:
         )
 
         return context
+
 
     # Page‑specific scraping methods
     async def _scrape_overview(
@@ -475,7 +478,6 @@ class StockAnalysisScraper:
 
         context = await self._create_context(browser)
         page = await context.new_page()
-        await stealth(page)
 
         await page.route(
             "**/*.{png,jpg,jpeg,gif,svg,woff,woff2,ttf,mp4,webm}",

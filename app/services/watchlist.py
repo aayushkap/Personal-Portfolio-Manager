@@ -10,6 +10,7 @@ import pandas as pd
 from app.core.logger import get_logger
 from app.services.base import BaseModule
 from app.utils.fin import parse_money, safe_float as _safe
+from app.services.watchlist_ai import WatchlistAIScreener
 
 logger = get_logger()
 
@@ -31,7 +32,6 @@ class WatchlistModule(BaseModule):
             tickers, today - timedelta(days=400), today
         ).ffill()
 
-        # Build a minimal currency map from cache purchase_details
         currency_map = {}
         for ticker in tickers:
             data = self.get_ticker(ticker)
@@ -40,12 +40,11 @@ class WatchlistModule(BaseModule):
                 if cur:
                     currency_map[ticker] = cur
 
-        # Convert prices to AED
         for ticker in prices.columns:
             currency = currency_map.get(ticker, "AED")
             prices[ticker] *= self.fx.get(currency, 1.0)
 
-        return [
+        rows = [
             row
             for item in items
             if item.get("ticker")
@@ -53,13 +52,8 @@ class WatchlistModule(BaseModule):
             if row
         ]
 
-    def get_watchlist_detail(self, ticker: str, timeframe: str = "1m") -> dict:
-        today = date.today()
-        return {
-            "ticker": ticker,
-            "chart": self._build_chart(ticker, timeframe, today),
-            "fundamentals": self._build_fundamentals(ticker),
-        }
+        # Inject persisted AI alerts — reads from disk, no LLM call here
+        return WatchlistAIScreener().merge_alerts(rows)
 
     def _build_row(
         self, item: dict, prices: pd.DataFrame, today: date, currency_map: dict = {}
@@ -87,7 +81,6 @@ class WatchlistModule(BaseModule):
         p1y = _ago(365)
 
         next_div_date, div_yield = self._next_dividend(ticker)
-
         meta = self._ticker_meta(ticker)
 
         return {
@@ -97,6 +90,7 @@ class WatchlistModule(BaseModule):
             "sector": item.get("sector") or meta.get("sector"),
             "logo_url": meta.get("logo_url"),
             "notes": item.get("notes"),
+            "criteria": item.get("criteria"),  # passes through for UI
             "current_price": _safe(current_price),
             "dod_pct": _safe(_pct(current_price, p1d)),
             "wow_pct": _safe(_pct(current_price, p1w)),
@@ -106,6 +100,14 @@ class WatchlistModule(BaseModule):
             "yoy_pct": _safe(_pct(current_price, p1y)),
             "next_div_date": next_div_date,
             "div_yield": div_yield,
+        }
+
+    def get_watchlist_detail(self, ticker: str, timeframe: str = "1m") -> dict:
+        today = date.today()
+        return {
+            "ticker": ticker,
+            "chart": self._build_chart(ticker, timeframe, today),
+            "fundamentals": self._build_fundamentals(ticker),
         }
 
     def _next_dividend(self, ticker: str) -> tuple[Optional[str], Optional[str]]:

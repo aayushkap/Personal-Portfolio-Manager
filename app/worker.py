@@ -13,6 +13,9 @@ from app.data.gsheet import GSheet_Manager
 from app.data.cache import Cache
 from app.data.fx import fetch_and_save_fx
 from app.services.quote import QuoteStore
+from app.services.watchlist import WatchlistModule
+from app.services.watchlist_ai import WatchlistAIScreener
+from app.data.db import DB
 
 logger = get_logger()
 
@@ -105,6 +108,29 @@ async def fundamentals_job():
         logger.exception("Fundamentals job failed")
 
 
+async def watchlist_screening_job():
+    logger.info("Watchlist screening job starting")
+    try:
+        gs = GSheet_Manager()
+        raw_items = gs.fetch_watchlist()
+
+        module = WatchlistModule(Cache(), DB())
+        enriched = module.get_watchlist(raw_items)
+
+        fundamentals_map = {
+            item["ticker"]: (
+                (data.statistics.dict() if data.statistics else {})
+                if (data := module.get_ticker(item["ticker"]))
+                else {}
+            )
+            for item in enriched
+        }
+
+        WatchlistAIScreener().run(enriched, fundamentals_map)
+    except Exception:
+        logger.exception("Watchlist screening job failed")
+
+
 async def main():
     scheduler = AsyncIOScheduler(timezone=DUBAI_TZ)
 
@@ -151,12 +177,25 @@ async def main():
         misfire_grace_time=300,
     )
 
+    scheduler.add_job(
+        watchlist_screening_job,
+        "cron",
+        day_of_week="mon-sat",
+        hour=18,
+        minute=0,
+        timezone="Asia/Dubai",
+        id="watchlist_screening",
+        max_instances=1,
+        misfire_grace_time=300,
+    )
+
     # await quote_job()
 
     scheduler.start()
     # await fundamentals_job()
     # await fx_job()
-    await ohlc_job(bars=2000)
+    # await ohlc_job(bars=2000)
+    await watchlist_screening_job()
 
     try:
         while True:

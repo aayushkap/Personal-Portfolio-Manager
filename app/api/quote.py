@@ -1,9 +1,7 @@
 # app/api/quote.py
 
-from typing import Literal
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 from app.services.quote import QuoteStore
-from app.api.deps import get_analytics_module
 
 router = APIRouter(prefix="/quote", tags=["Quote"])
 

@@ -60,3 +60,4 @@ yf
 yfinance
 tvDatafeed
 scipy
+google-genai

@@ -9,7 +9,7 @@ import re
 from typing import Dict, Any
 from dateutil import parser
 from playwright.async_api import async_playwright, Browser, Page, BrowserContext
-from playwright_stealth import stealth_async
+from playwright_stealth import stealth
 from app.utils.time_utils import dubai_now_iso
 
 from app.core.logger import get_logger
@@ -475,7 +475,7 @@ class StockAnalysisScraper:
 
         context = await self._create_context(browser)
         page = await context.new_page()
-        await stealth_async(page)
+        await stealth(page)
 
         await page.route(
             "**/*.{png,jpg,jpeg,gif,svg,woff,woff2,ttf,mp4,webm}",

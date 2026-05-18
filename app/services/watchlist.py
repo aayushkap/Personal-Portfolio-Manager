@@ -104,11 +104,15 @@ class WatchlistModule(BaseModule):
 
     def get_watchlist_detail(self, ticker: str, timeframe: str = "1m") -> dict:
         today = date.today()
-        return {
+
+        detail = {
             "ticker": ticker,
             "chart": self._build_chart(ticker, timeframe, today),
             "fundamentals": self._build_fundamentals(ticker),
         }
+
+        # merge_alerts expects a list of dicts with a "ticker" key.
+        return WatchlistAIScreener().merge_alerts([detail])[0]
 
     def _next_dividend(self, ticker: str) -> tuple[Optional[str], Optional[str]]:
         today = date.today()

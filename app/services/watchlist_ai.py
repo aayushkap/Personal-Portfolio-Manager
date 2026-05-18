@@ -48,11 +48,14 @@ Recent news (queries: {search_queries}):
 
 Today: {today}
 
-For each buy condition, state whether it is met or not. \
-One short sentence per condition. No essays. No filler.
-Set ready_to_buy to true only if ALL conditions are met.
-"""
+The "Buy conditions" text contains both "Critical (Must-Haves)" and "Good to Have (Bonuses)".
+Separate them accordingly in your output.
 
+For each condition, state whether it is met or not based ONLY on the provided news, price, and fundamentals. \
+One short sentence per condition. No essays. No filler. If data is missing (e.g. Treasury yields), state that it cannot be assessed.
+
+Set ready_to_buy to true ONLY if ALL Critical conditions are met. Bonus conditions do not affect ready_to_buy.
+"""
 
 _RESPONSE_SCHEMA = {
     "type": "object",
@@ -60,7 +63,19 @@ _RESPONSE_SCHEMA = {
         "ready_to_buy": {
             "type": "boolean",
         },
-        "conditions": {
+        "critical_conditions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "condition": {"type": "string"},
+                    "met": {"type": "boolean"},
+                    "note": {"type": "string"},
+                },
+                "required": ["condition", "met", "note"],
+            },
+        },
+        "bonus_conditions": {
             "type": "array",
             "items": {
                 "type": "object",
@@ -73,7 +88,7 @@ _RESPONSE_SCHEMA = {
             },
         },
     },
-    "required": ["ready_to_buy", "conditions"],
+    "required": ["ready_to_buy", "critical_conditions", "bonus_conditions"],
 }
 
 
@@ -107,7 +122,8 @@ class WatchlistAIScreener:
             if alert:
                 row["ai_alert"] = {
                     "ready_to_buy": alert.get("ready_to_buy", False),
-                    "conditions": alert.get("conditions", []),
+                    "critical_conditions": alert.get("critical_conditions", []),
+                    "bonus_conditions": alert.get("bonus_conditions", []),
                     "screened_at": alert.get("screened_at"),
                     "search_queries": alert.get("search_queries", []),
                 }
@@ -143,7 +159,12 @@ class WatchlistAIScreener:
                     article["_query"] = query
                     all_news.append(article)
 
-        logger.info("%s → %d news items fetched across %d queries", ticker, len(all_news), len(queries))
+        logger.info(
+            "%s → %d news items fetched across %d queries",
+            ticker,
+            len(all_news),
+            len(queries),
+        )
 
         news_text = (
             "\n".join(
@@ -158,7 +179,9 @@ class WatchlistAIScreener:
             note=note,
             criteria=criteria,
             price=price or "unknown",
-            fundamentals=json.dumps(fundamentals, default=str) if fundamentals else "{}",
+            fundamentals=(
+                json.dumps(fundamentals, default=str) if fundamentals else "{}"
+            ),
             search_queries=", ".join(f'"{q}"' for q in queries),
             news_text=news_text,
             today=date.today().isoformat(),
@@ -180,7 +203,8 @@ class WatchlistAIScreener:
             "screened_at": datetime.utcnow().isoformat() + "Z",
             "search_queries": queries,
             "ready_to_buy": result.get("ready_to_buy", False),
-            "conditions": result.get("conditions", []),
+            "critical_conditions": result.get("critical_conditions", []),
+            "bonus_conditions": result.get("bonus_conditions", []),
         }
 
     def _generate_queries(self, ticker: str, note: str, criteria: str) -> list[str]:

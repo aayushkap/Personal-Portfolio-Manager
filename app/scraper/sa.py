@@ -142,7 +142,6 @@ class StockAnalysisScraper:
 
         return context
 
-
     # Page‑specific scraping methods
     async def _scrape_overview(
         self, page: Page, exchange: str, symbol: str

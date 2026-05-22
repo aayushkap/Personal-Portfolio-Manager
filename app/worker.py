@@ -189,7 +189,6 @@ async def main():
         misfire_grace_time=300,
     )
 
-
     scheduler.start()
     # await fundamentals_job()
     # await fx_job()

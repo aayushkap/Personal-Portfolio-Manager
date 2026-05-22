@@ -18,7 +18,7 @@ def get_watchlist(module: WatchlistModule = Depends(get_watchlist_module)):
 @router.get("/{ticker}")
 def get_watchlist_detail(
     ticker: str,
-    timeframe: str = Query("1m", pattern="^(1d|1w|1m|3m|max)$"),
+    timeframe: str = Query("1m", pattern="^(1d|1w|1m|3m|6m|1y|5y|max)$"),
     module: WatchlistModule = Depends(get_watchlist_module),
 ):
     return module.get_watchlist_detail(

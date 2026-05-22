@@ -51,7 +51,7 @@ class HoldingsModule(BaseModule):
     def get_holding_detail(
         self,
         ticker: str,
-        timeframe: str = "1m",  # "1d" | "1w" | "1m" | "3m" | "max"
+        timeframe: str = "1m",  # "1d" | "1w" | "1m" | "3m" ...
         filters: Optional[PortfolioFilters] = None,
     ) -> dict:
         tx_all = self.get_all_transactions()
@@ -176,6 +176,9 @@ class HoldingsModule(BaseModule):
             "1w": {"interval_mins": 30, "days_back": 7},
             "1m": {"interval_mins": 60, "days_back": 30},  # daily
             "3m": {"interval_mins": 1440, "days_back": 90},
+            "6m": {"interval_mins": 1440, "days_back": 180},
+            "1y": {"interval_mins": 1440, "days_back": 360},
+            "5y": {"interval_mins": 1440, "days_back": 360 * 5},
             "max": {"interval_mins": 1440, "days_back": None},  # full history
         }
 

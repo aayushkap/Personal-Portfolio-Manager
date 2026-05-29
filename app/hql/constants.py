@@ -1,0 +1,26 @@
+from __future__ import annotations
+
+FIELD_MAP = {
+    "pe": ("statistics", "Valuation Ratios", "PE Ratio"),
+    "forward_pe": ("statistics", "Valuation Ratios", "Forward PE"),
+    "pb": ("statistics", "Valuation Ratios", "PB Ratio"),
+    "ps": ("statistics", "Valuation Ratios", "PS Ratio"),
+    "pfcf": ("statistics", "Valuation Ratios", "P/FCF Ratio"),
+    "roe": ("statistics", "Financial Efficiency", "Return on Equity (ROE)"),
+    "roa": ("statistics", "Financial Efficiency", "Return on Assets (ROA)"),
+    "roic": ("statistics", "Financial Efficiency", "Return on Invested Capital (ROIC)"),
+    "roce": ("statistics", "Financial Efficiency", "Return on Capital Employed (ROCE)"),
+    "div_yield": ("statistics", "Dividends & Yields", "Dividend Yield"),
+    "payout_ratio": ("statistics", "Dividends & Yields", "Payout Ratio"),
+    "gross_margin": ("statistics", "Margins", "Gross Margin"),
+    "op_margin": ("statistics", "Margins", "Operating Margin"),
+    "net_margin": ("statistics", "Margins", "Profit Margin"),
+    "fcf_margin": ("statistics", "Margins", "FCF Margin"),
+    "debt_equity": ("statistics", "Financial Position", "Debt / Equity"),
+    "current_ratio": ("statistics", "Financial Position", "Current Ratio"),
+    "beta": ("statistics", "Stock Price Statistics", "Beta (5Y)"),
+    "rsi": ("statistics", "Stock Price Statistics", "Relative Strength Index (RSI)"),
+    "altman_z": ("statistics", "Scores", "Altman Z-Score"),
+    "piotroski_f": ("statistics", "Scores", "Piotroski F-Score"),
+    "graham_number": ("statistics", "Fair Value", "Graham Number"),
+}

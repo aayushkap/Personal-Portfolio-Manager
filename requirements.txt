@@ -58,6 +58,6 @@ websocket-client
 websockets
 yf
 yfinance
-tvDatafeed
+tradingview-datafeed
 scipy
 google-genai

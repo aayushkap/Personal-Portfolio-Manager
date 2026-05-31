@@ -194,7 +194,7 @@ async def main():
     await fx_job()
     await ohlc_job(bars=2000)
     # await quote_job()
-    await watchlist_screening_job()
+    # await watchlist_screening_job()
 
     try:
         while True:

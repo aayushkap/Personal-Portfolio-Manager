@@ -1,22 +1,52 @@
-from .facade import HQL
+# app/hql/facade.py
+
+from __future__ import annotations
+
 from app.data.cache import Cache
 from app.data.db import DB
+from app.hql.queries.ticker import TickerQuery, TickersQuery
+from app.hql.queries.portfolio import PortfolioQuery
+from app.hql.repositories import CacheRepository, FXService, PriceRepository
 
-hql = HQL(cache=Cache(), db=DB())
 
-print(hql.ticker("DFM:EMAAR").raw())
-print(hql.ticker("DFM:EMAAR").info())
-print(hql.ticker("DFM:EMAAR").overview())
-print(hql.ticker("DFM:EMAAR").statistics())
-print(hql.ticker("DFM:EMAAR").ohlcv(days=90).head())
-print(hql.ticker("DFM:EMAAR").dividends().head())
-print(hql.ticker("DFM:EMAAR").financials().head())
-print(hql.ticker("DFM:EMAAR").ratios().head())
-print(hql.ticker("DFM:EMAAR").prices(days=64).head())
+class HQL:
+    """
+    HQL facade.
 
-print(hql.tickers(["DFM:EMAAR", "NYSE:O"]).prices(days=365))
-print(
-    hql.tickers(["DFM:EMAAR", "DFM:DUBAIRESI"])
-    .compare("pe", "div_yield", "roe", "beta")
-    .head()
-)
+    Public entry points:
+        hql.ticker("EXCHANGE:SYMBOL")
+        hql.ticker("DFM:EMAAR")
+        hql.tickers(["DFM:EMAAR", "NYSE:O"])
+        hql.portfolio()
+    """
+
+    def __init__(self, cache: Cache, db: DB) -> None:
+        self._cache = cache
+        self._db = db
+
+        self.fx = FXService()
+        self.cache_repo = CacheRepository(cache)
+        self.price_repo = PriceRepository(db, self.fx, self.cache_repo)
+
+    def ticker(self, ticker: str) -> TickerQuery:
+        return TickerQuery(
+            ticker=ticker,
+            cache_repo=self.cache_repo,
+            price_repo=self.price_repo,
+            fx=self.fx,
+        )
+
+    def tickers(self, tickers: list[str]) -> TickersQuery:
+        return TickersQuery(
+            tickers=tickers,
+            cache_repo=self.cache_repo,
+            price_repo=self.price_repo,
+            fx=self.fx,
+        )
+
+    def portfolio(self) -> PortfolioQuery:
+        return PortfolioQuery(
+            cache_repo=self.cache_repo,
+            price_repo=self.price_repo,
+            fx=self.fx,
+        )

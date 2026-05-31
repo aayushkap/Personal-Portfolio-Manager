@@ -63,7 +63,7 @@ class GSheet_Manager:
     def _format_watchlist(self, rows: list) -> list[dict]:
         result = []
         for row in rows:
-            raw = str(row.get("Instrument", "")).strip()
+            raw = str(row.get("Instrument", "")).strip().replace(" ", "")
             t = parse_ticker(raw)
             if not t:
                 continue
@@ -71,10 +71,10 @@ class GSheet_Manager:
                 {
                     **_ticker_fields(t),
                     "notes": str(row.get("Notes", "")).strip() or None,
-                    "criteria": str(row.get("Criteria", "")).strip()
-                    or None,  # ← add this
+                    "criteria": str(row.get("Criteria", "")).strip() or None,
                 }
             )
+
         return result
 
     def format_transactions(self, rows: list, formula_rows: list) -> list[dict]:

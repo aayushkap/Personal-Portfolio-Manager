@@ -155,7 +155,7 @@ class WatchlistAIScreener:
         except Exception:
             return {"generated_at": None, "alerts": []}
 
-    #  Internals
+    # Internals
     def _screen(self, item: dict, fundamentals: dict) -> Optional[dict]:
         ticker = item["ticker"]
         note = item.get("notes") or ""

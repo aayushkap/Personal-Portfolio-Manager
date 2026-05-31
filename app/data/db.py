@@ -21,8 +21,7 @@ class DB:
 
     def _init(self):
         with self._connect() as conn:
-            conn.execute(
-                """
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS ohlc (
                     symbol    TEXT    NOT NULL,
                     timestamp TEXT    NOT NULL,
@@ -30,8 +29,7 @@ class DB:
                     volume    REAL,
                     PRIMARY KEY (symbol, timestamp)
                 )
-            """
-            )
+            """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_ohlc_symbol ON ohlc(symbol)")
 
     # Write

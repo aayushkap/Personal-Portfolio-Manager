@@ -70,7 +70,7 @@ class PriceRepository:
         granularity: str = "1D",
     ) -> pd.DataFrame:
         rows = self._db.get(ticker, limit=50_000)
-        expected = ["open", "high", "low", "close", "volume"]
+        expected = ["symbol", "timestamp", "close", "volume", "ts"]
 
         if not rows:
             return pd.DataFrame(columns=expected)
@@ -119,32 +119,25 @@ class PriceRepository:
 
         return out.sort_index()
 
-    def get_close_series(
-        self,
-        ticker: str,
-        start: date,
-        end: date,
-        granularity: str = "1D",
-    ) -> pd.Series:
-        df = self.get_ohlcv(ticker, start, end, granularity=granularity)
-        if df.empty:
-            return pd.Series(dtype=float, name=ticker)
-        s = df["close"].copy()
-        s.name = ticker
-        return s
+    def get_latest_price(self, ticker: str) -> dict:
+        """
+        Returns a simple dictionary snapshot of the latest price in AED.
+        """
+        row = self._db.get_latest(ticker)
+        if not row:
+            return {}
 
-    def get_multi_close_series(
-        self,
-        tickers: list[str],
-        start: date,
-        end: date,
-        granularity: str = "1D",
-    ) -> pd.DataFrame:
-        frames = []
-        for ticker in tickers:
-            s = self.get_close_series(ticker, start, end, granularity=granularity)
-            if not s.empty:
-                frames.append(s)
-        if not frames:
-            return pd.DataFrame()
-        return pd.concat(frames, axis=1).sort_index()
+        raw = self._cache_repo.get_raw_ticker(ticker)
+        currency = self._cache_repo.resolve_currency(raw)
+
+        close_raw = row.get("close")
+        if close_raw is not None:
+            close_aed = self._fx.to_aed(float(close_raw), currency)
+        else:
+            close_aed = None
+
+        return {
+            "symbol": row.get("symbol"),
+            "timestamp": row.get("timestamp"),
+            "close": close_aed,
+        }

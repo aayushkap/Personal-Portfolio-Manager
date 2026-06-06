@@ -274,7 +274,7 @@ class AnalyticsModule(BaseModule):
                 "current_quarter": _quarter_label(today),
                 "quarter_projected": round(q_total, 2),
             },
-            "events": events[:8],
+            "events": events[-8:],
         }
 
     @staticmethod

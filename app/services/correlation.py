@@ -8,12 +8,12 @@ import math
 
 import numpy as np
 import pandas as pd
+from scipy import stats
 
 from app.core.logger import get_logger
 from app.services.base import BaseModule
 from app.services.filters import PortfolioFilters, DateRange
 from app.services.overlays import OverlayResolver, OVERLAY_CATALOGUE
-from scipy import stats
 
 logger = get_logger()
 
@@ -42,15 +42,6 @@ def _safe(v):
 class CorrelationModule(BaseModule):
     """
     Pearson correlation matrix on log returns for a set of instruments and overlays.
-
-    get_matrix(items, period) : {
-        period:    "1y",
-        start:     "2025-04-07",
-        end:       "2026-04-07",
-        tickers:   [...],
-        matrix:    [ { ticker_a, ticker_b, correlation, observations } ],
-        coverage:  { ticker: observation_count }
-    }
     """
 
     def get_matrix(
@@ -69,17 +60,30 @@ class CorrelationModule(BaseModule):
         overlay_keys = [t for t in items if t.upper() in OVERLAY_CATALOGUE]
         real_tickers = [t for t in items if t.upper() not in OVERLAY_CATALOGUE]
 
-        # Fetch instrument prices
-        prices = (
-            self.get_price_series(real_tickers, start, end)
-            if real_tickers
-            else pd.DataFrame()
-        )
+        # Fetch instrument prices via HQL
+        price_frames = []
+        for ticker in real_tickers:
+            try:
+                t = self.hql.ticker(ticker)
+                result = t.prices(start=start, end=end)
+                if result is None or (hasattr(result, "empty") and result.empty):
+                    continue
+                # Extract close from OHLCV if DataFrame
+                if isinstance(result, pd.DataFrame):
+                    if "close" not in result.columns:
+                        continue
+                    s = result["close"].rename(ticker)
+                else:
+                    s = result.rename(ticker)
+                price_frames.append(s)
+            except Exception as e:
+                logger.error("Failed to fetch prices for %s: %s", ticker, e)
+
+        prices = pd.concat(price_frames, axis=1) if price_frames else pd.DataFrame()
 
         # Fetch overlays
         if overlay_keys:
             resolver = OverlayResolver(self)
-            # Create a basic filter for the requested period to pass to the resolver
             filters = PortfolioFilters(date_range=DateRange(start=start, end=end))
 
             overlay_series = []
@@ -92,10 +96,9 @@ class CorrelationModule(BaseModule):
 
             if overlay_series:
                 overlays_df = pd.concat(overlay_series, axis=1)
-                # overlays already have tz stripped above
 
                 if not prices.empty:
-                    # prices index is tz-aware Asia/Dubai — strip it to match overlays
+                    # prices index is tz-aware Asia/Dubai from HQL — strip to match overlays
                     prices.index = (
                         pd.to_datetime(prices.index).tz_localize(None)
                         if prices.index.tz is None
@@ -121,9 +124,6 @@ class CorrelationModule(BaseModule):
             return {"error": f"Insufficient data. Missing: {missing}"}
 
         # Calculate log returns
-        # Handle zero or negative values in overlays (like DART or TWR when starting)
-        # Shift values up by min + 1 if there are <= 0 values to allow log calc,
-        # or just use simple returns for items that can go negative.
         returns = prices / prices.shift(1)
 
         # Safe log: mask out <= 0 values before taking log to avoid warnings/NaNs
@@ -149,9 +149,7 @@ class CorrelationModule(BaseModule):
                 if mode == "regression" and n >= _MIN_OBSERVATIONS:
                     slope, intercept, r, p, se = stats.linregress(pair[a], pair[b])
                     beta = _safe(round(float(slope), 4))
-                    alpha_val = _safe(
-                        round(float(intercept), 6)
-                    )  # daily alpha in log return
+                    alpha_val = _safe(round(float(intercept), 6))
                     r_squared = _safe(round(float(r**2), 4))
                     p_value = _safe(round(float(p), 4))
                     std_err = _safe(round(float(se), 6))
@@ -170,7 +168,7 @@ class CorrelationModule(BaseModule):
                         "co_movement": _co_movement(
                             corr, ta["direction"], tb["direction"]
                         ),
-                        # Regression fields — null when mode="pearson"
+                        # Regression fields
                         "beta": beta,
                         "alpha": alpha_val,
                         "r_squared": r_squared,
@@ -201,7 +199,6 @@ class CorrelationModule(BaseModule):
 def _co_movement(corr: float | None, dir_a: str, dir_b: str) -> str:
     """
     Combines correlation sign with direction to give a plain-English label.
-    e.g. strongly correlated + both up = "rising_together"
     """
     if corr is None:
         return "insufficient_data"

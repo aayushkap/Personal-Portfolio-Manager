@@ -15,6 +15,7 @@ from app.data.schemas import DividendRow, PurchaseDetail, TickerCache
 from app.services.filters import PortfolioFilters
 from app.utils.fin import parse_money
 from app.data.fx import load_fx_rates
+from app.hql import HQL
 
 logger = get_logger()
 
@@ -34,6 +35,7 @@ class BaseModule:
         self._cache = cache
         self._db = db
         self._fx: dict[str, float] | None = None
+        self.hql = HQL()
 
     @property
     def fx(self) -> dict[str, float]:

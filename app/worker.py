@@ -145,6 +145,16 @@ async def main():
         misfire_grace_time=120,
     )
     scheduler.add_job(
+        ohlc_job,
+        "cron",
+        day_of_week="mon-fri",
+        hour="17-23",
+        minute="0",
+        id="ohlc_intraday_slow",
+        max_instances=1,
+        misfire_grace_time=120,
+    )
+    scheduler.add_job(
         fundamentals_job,
         "cron",
         day_of_week="mon-fri",
@@ -190,9 +200,9 @@ async def main():
     )
 
     scheduler.start()
-    await fundamentals_job()
-    await fx_job()
-    await ohlc_job(bars=2000)
+    # await fundamentals_job()
+    # await fx_job()
+    # await ohlc_job(bars=2000)
     # await quote_job()
     # await watchlist_screening_job()
 

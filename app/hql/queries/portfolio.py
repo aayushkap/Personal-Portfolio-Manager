@@ -7,7 +7,7 @@ from typing import Literal
 
 import pandas as pd
 
-from app.hql.parsers import parse_date, parse_money_string, parse_number
+from app.utils.parsers import parse_date, parse_money_string, parse_number
 from app.hql.repositories import CacheRepository, FXService, PriceRepository
 
 

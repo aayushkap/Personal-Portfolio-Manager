@@ -38,16 +38,17 @@ def list_holdings(
 @router.get("/{ticker}")
 def get_holding_detail(
     ticker: str,
-    timeframe: str = Query("1m", pattern="^(1d|1w|1m|3m|6m|1y|5y|max)$"),
+    timeframe: str = Query("1m", pattern="^(1d|1w|1m|3m|6m|1y|5y|all)$"),
     module: HoldingsModule = Depends(get_holdings_module),
 ):
     """
     Detailed view for a single holding.
     Returns:
-    - chart:        OHLCV bars for selected timeframe (1d/1w/1m/3m/max)
+    - chart:        OHLCV bars for selected timeframe (1d/1w/1m/3m/all)
     - transactions: buys, sells, dividends received — chronological
     - fundamentals: key company metrics from cache
     """
+    print(f"timeframe: {timeframe}")
     return module.get_holding_detail(
         ticker=ticker.upper(),
         timeframe=timeframe,

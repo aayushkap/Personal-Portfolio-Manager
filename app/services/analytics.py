@@ -5,12 +5,12 @@ from __future__ import annotations
 import calendar
 from datetime import date, timedelta
 from typing import Literal
-import pandas as pd
 
+import pandas as pd
 
 from app.core.logger import get_logger
 from app.services.base import BaseModule
-from app.utils.fin import parse_money
+from app.services.filters import PortfolioFilters
 
 logger = get_logger()
 
@@ -40,53 +40,79 @@ class AnalyticsModule(BaseModule):
         self,
         mode: Literal["price_return", "total"] = "total",
     ) -> dict:
-        tx = self.get_all_transactions()
-        if tx.empty:
+        p = self.hql.portfolio()
+
+        holdings_df = p.holdings()
+        if holdings_df.empty:
             return {"mode": mode, "positions": [], "summary": None}
 
-        today = date.today()
-        tickers = tx["ticker"].unique().tolist()
-        ticker_currency = (
-            tx.drop_duplicates("ticker").set_index("ticker")["currency"].to_dict()
+        tx_df = p.transactions()
+        if tx_df.empty:
+            return {"mode": mode, "positions": [], "summary": None}
+
+        divs_df = p.dividends()
+        received_divs = (
+            divs_df[divs_df["status"] == "received"]
+            if not divs_df.empty
+            else pd.DataFrame()
         )
-        raw_prices = self.get_latest_prices(tickers)
-        prices = {
-            t: p * self.fx.get(ticker_currency.get(t, "AED"), 1.0)
-            for t, p in raw_prices.items()
-        }
+        cum_divs_by_ticker = (
+            received_divs.groupby("ticker")["total_aed"].sum().to_dict()
+            if not received_divs.empty
+            else {}
+        )
+
+        # Build per-ticker cost info from transactions
+        tx_df = tx_df.copy()
+        tx_df["tx_lower"] = tx_df["transaction"].str.lower()
+        buys = tx_df[tx_df["tx_lower"] == "buy"]
+        sells = tx_df[tx_df["tx_lower"] == "sell"]
+
+        shares_bought = buys.groupby("ticker")["shares"].sum()
+        total_cost = buys.groupby("ticker")["total_cost_aed"].sum()
+        shares_sold = sells.groupby("ticker")["shares"].sum()
+        sell_proceeds = sells.groupby("ticker")["total_cost_aed"].sum()
+
+        # sector/exchange meta — first transaction per ticker
+        meta_cols = ["ticker", "sector", "exchange"]
+        ticker_meta = tx_df.drop_duplicates("ticker").set_index("ticker")[
+            ["sector", "exchange"]
+        ]
+
         positions = []
+        for _, row in holdings_df.iterrows():
+            ticker = row["ticker"]
 
-        for ticker in tickers:
-            t_tx = tx[tx["ticker"] == ticker].sort_values("trade_date")
-            buys = t_tx[t_tx["action"] == "BUY"]
-            sells = t_tx[t_tx["action"] == "SELL"]
+            sb = shares_bought.get(ticker, 0.0)
+            tc = total_cost.get(ticker, 0.0)
+            ss = shares_sold.get(ticker, 0.0)
+            sp = sell_proceeds.get(ticker, 0.0)
 
-            shares_bought = buys["shares"].sum()
-            total_cost = buys["total_cost"].sum()
-            shares_sold = sells["shares"].sum()
-            sell_proceeds = sells["total_cost"].sum()
-            shares_held = max(shares_bought - shares_sold, 0.0)
+            shares_held = float(row["shares"])
+            if shares_held <= 0:
+                continue
 
-            avg_cost = total_cost / shares_bought if shares_bought else 0.0
-            current_price = prices.get(ticker, 0.0)
-            market_value = shares_held * current_price
-            cost_basis = shares_held * avg_cost
+            avg_cost = tc / sb if sb else 0.0
+            current_price = float(row["last_price_aed"])
+            market_value = float(row["market_value_aed"])
+            cost_basis = float(row["cost_basis_aed"])
 
             unrealized = market_value - cost_basis
-            realized = sell_proceeds - (shares_sold * avg_cost)
-            divs = self._total_dividends_received([ticker], t_tx, today)
+            realized = sp - (ss * avg_cost)
+            divs = cum_divs_by_ticker.get(ticker, 0.0)
 
             price_return = unrealized + realized
             total_return = price_return + divs
             return_aed = total_return if mode == "total" else price_return
-            return_pct = round(return_aed / total_cost * 100, 2) if total_cost else 0.0
+            return_pct = round(return_aed / tc * 100, 2) if tc else 0.0
 
-            meta = t_tx.iloc[0]
+            meta = ticker_meta.loc[ticker] if ticker in ticker_meta.index else {}
+
             positions.append(
                 {
                     "ticker": ticker,
-                    "sector": meta["sector"],
-                    "exchange": meta["exchange"],
+                    "sector": meta.get("sector") if hasattr(meta, "get") else None,
+                    "exchange": meta.get("exchange") if hasattr(meta, "get") else None,
                     "shares_held": round(shares_held, 4),
                     "avg_cost": round(avg_cost, 4),
                     "current_price": round(current_price, 4),
@@ -104,7 +130,7 @@ class AnalyticsModule(BaseModule):
 
         total_invested = sum(p["cost_basis"] for p in positions)
         total_market = sum(p["market_value"] for p in positions)
-        total_return = sum(p["return_aed"] for p in positions)
+        total_ret = sum(p["return_aed"] for p in positions)
 
         return {
             "mode": mode,
@@ -112,9 +138,9 @@ class AnalyticsModule(BaseModule):
             "summary": {
                 "total_invested": round(total_invested, 2),
                 "total_market_value": round(total_market, 2),
-                "total_return": round(total_return, 2),
+                "total_return": round(total_ret, 2),
                 "total_return_pct": (
-                    round(total_return / total_invested * 100, 2)
+                    round(total_ret / total_invested * 100, 2)
                     if total_invested
                     else 0.0
                 ),
@@ -125,130 +151,97 @@ class AnalyticsModule(BaseModule):
         self,
         by: Literal["position", "sector", "exchange"] = "position",
     ) -> dict:
-        tx = self.get_all_transactions()
-        if tx.empty:
-            return {"by": by, "total_market_value": 0.0, "allocations": []}
-
-        holdings = self.get_holdings(date.today(), transactions=tx)
-        if not holdings:
-            return {"by": by, "total_market_value": 0.0, "allocations": []}
-
-        ticker_currency = (
-            tx.drop_duplicates("ticker").set_index("ticker")["currency"].to_dict()
-        )
-        raw_prices = self.get_latest_prices(list(holdings.keys()))
-        prices = {
-            t: p * self.fx.get(ticker_currency.get(t, "AED"), 1.0)
-            for t, p in raw_prices.items()
-        }
-
-        mv_ticker = {t: round(s * prices.get(t, 0.0), 2) for t, s in holdings.items()}
-        total_mv = sum(mv_ticker.values())
-        if not total_mv:
-            return {"by": by, "total_market_value": 0.0, "allocations": []}
-
-        if by == "position":
-            buckets = {t: mv for t, mv in mv_ticker.items()}
-        else:
-            col = "sector" if by == "sector" else "exchange"
-            meta = tx.drop_duplicates("ticker").set_index("ticker")[col].to_dict()
-            buckets: dict[str, float] = {}
-            for ticker, mv in mv_ticker.items():
-                label = meta.get(ticker) or "Unknown"
-                buckets[label] = buckets.get(label, 0.0) + mv
-
-        allocations = sorted(
-            [
-                {
-                    "label": label,
-                    "market_value": round(mv, 2),
-                    "weight_pct": round(mv / total_mv * 100, 2),
-                }
-                for label, mv in buckets.items()
-            ],
-            key=lambda x: -x["weight_pct"],
-        )
-
-        return {
-            "by": by,
-            "total_market_value": round(total_mv, 2),
-            "allocations": allocations,
-        }
+        p = self.hql.portfolio()
+        result = p.allocation(by=by)
+        # portfolio().allocation() already returns the exact output schema
+        return result
 
     def get_income(self) -> dict:
-        tx = self.get_all_transactions()
-        if tx.empty:
+        p = self.hql.portfolio()
+
+        divs_df = p.dividends()
+        if divs_df.empty:
+            return self._empty_income()
+
+        tx_df = p.transactions()
+        if tx_df.empty:
             return self._empty_income()
 
         today = date.today()
         year_start = date(today.year, 1, 1)
         q_start, q_end = _quarter_bounds(today)
-        tickers = tx["ticker"].unique().tolist()
+        one_year_ago = today - timedelta(days=365)
+
+        ticker_meta = (
+            tx_df.drop_duplicates("ticker").set_index("ticker")[["sector"]]
+            if "sector" in tx_df.columns
+            else pd.DataFrame()
+        )
+
         events = []
         ytd_total = 0.0
         q_total = 0.0
 
-        for ticker_key in tickers:
-            t_tx = tx[tx["ticker"] == ticker_key]
-            meta = t_tx.iloc[0]
-            divs = self.get_dividends(ticker_key)
+        for _, div in divs_df.iterrows():
+            ticker = div["ticker"]
+            ex_date = div["ex_date"]
+            pay_date = div["pay_date"]
+            amount_per_share = div["amount_per_share_aed"]
+            shares = div["shares_held"]
+            total_aed = div["total_aed"]
+            status = div["status"]
 
-            for div in divs:
-                if not div.cash_amount:
-                    continue
+            if not amount_per_share or not shares or shares <= 0:
+                continue
 
-                per_share, currency = parse_money(div.cash_amount)
-                if not per_share:
-                    continue
-                per_share = per_share * self.fx.get(currency, 1.0)
+            ref_date = pay_date or ex_date
+            if ref_date is None:
+                continue
 
-                ref_date = div.pay_date or div.ex_date
-                if not ref_date:
-                    continue
+            # Reclassify status to match original schema
+            # (HQL gives 'received'/'pending' — expand pending to entitled/soon/upcoming)
+            if status == "received":
+                event_status = "received"
+            elif ex_date and ex_date <= today:
+                event_status = "entitled"
+            elif ref_date and (ref_date - today).days <= 30:
+                event_status = "soon"
+            else:
+                event_status = "upcoming"
 
-                shares = self.get_holdings(div.ex_date, [ticker_key], t_tx).get(
-                    ticker_key, 0.0
-                )
-                if shares <= 0:
-                    continue
+            sector = (
+                ticker_meta.loc[ticker, "sector"]
+                if ticker in ticker_meta.index
+                else None
+            )
 
-                amount = round(shares * per_share, 2)
-                days_away = (ref_date - today).days
+            amount = round(float(total_aed), 2)
 
-                if div.pay_date and div.pay_date <= today:
-                    status = "received"
-                elif div.ex_date and div.ex_date <= today:
-                    status = "entitled"
-                elif days_away <= 30:
-                    status = "soon"
-                else:
-                    status = "upcoming"
+            events.append(
+                {
+                    "ticker": ticker,
+                    "sector": sector,
+                    "ex_date": ex_date.isoformat() if ex_date else None,
+                    "pay_date": pay_date.isoformat() if pay_date else None,
+                    "amount_per_share": round(float(amount_per_share), 4),
+                    "shares": round(float(shares), 6),
+                    "amount": amount,
+                    "status": event_status,
+                }
+            )
 
-                events.append(
-                    {
-                        "ticker": ticker_key,
-                        "sector": meta["sector"],
-                        "ex_date": div.ex_date.isoformat() if div.ex_date else None,
-                        "pay_date": div.pay_date.isoformat() if div.pay_date else None,
-                        "amount_per_share": per_share,
-                        "shares": shares,
-                        "amount": amount,
-                        "status": status,
-                    }
-                )
+            if pay_date and year_start <= pay_date <= today:
+                ytd_total += amount
+            if ref_date and q_start <= ref_date <= q_end:
+                q_total += amount
 
-                if div.pay_date and year_start <= div.pay_date <= today:
-                    ytd_total += amount
-                if q_start <= ref_date <= q_end:
-                    q_total += amount
-
-        total_cost = tx[tx["action"] == "BUY"]["total_cost"].sum()
+        total_cost_aed = tx_df[tx_df["transaction"].str.lower() == "buy"][
+            "total_cost_aed"
+        ].sum()
         total_received = sum(e["amount"] for e in events if e["status"] == "received")
-        yoc_alltime = round(total_received / total_cost * 100, 2) if total_cost else 0.0
-
-        # Trailing 12M YoC:
-        # dividends received in last 365 days / total invested in last 365 days
-        one_year_ago = today - timedelta(days=365)
+        yoc_alltime = (
+            round(total_received / total_cost_aed * 100, 2) if total_cost_aed else 0.0
+        )
 
         trailing_divs = sum(
             e["amount"]
@@ -258,11 +251,11 @@ class AnalyticsModule(BaseModule):
             and one_year_ago <= pd.to_datetime(e["pay_date"]).date() <= today
         )
 
-        invested_last_12m = tx[
-            (tx["action"] == "BUY")
-            & (pd.to_datetime(tx["trade_date"]).dt.date >= one_year_ago)
-            & (pd.to_datetime(tx["trade_date"]).dt.date <= today)
-        ]["total_cost"].sum()
+        invested_last_12m = tx_df[
+            (tx_df["transaction"].str.lower() == "buy")
+            & (pd.to_datetime(tx_df["date"], errors="coerce").dt.date >= one_year_ago)
+            & (pd.to_datetime(tx_df["date"], errors="coerce").dt.date <= today)
+        ]["total_cost_aed"].sum()
 
         yoc_trailing_12m = (
             round(trailing_divs / invested_last_12m * 100, 2)
@@ -287,7 +280,6 @@ class AnalyticsModule(BaseModule):
     @staticmethod
     def _empty_income() -> dict:
         today = date.today()
-        q_start, q_end = _quarter_bounds(today)
         return {
             "summary": {
                 "total_received_alltime": 0.0,

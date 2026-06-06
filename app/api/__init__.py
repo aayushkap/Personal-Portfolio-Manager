@@ -24,7 +24,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="BBBB BE", lifespan=lifespan)
+app = FastAPI(title="HSFW BE", lifespan=lifespan)
 app.include_router(overview)
 app.include_router(analytics)
 app.include_router(correlation)
@@ -44,7 +44,7 @@ app.add_middleware(
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "service": "BBBB BE"}
+    return {"status": "ok", "service": "HSFW BE"}
 
 
 if __name__ == "__main__":

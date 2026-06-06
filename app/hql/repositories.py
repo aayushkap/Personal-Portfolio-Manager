@@ -9,7 +9,7 @@ from app.data.cache import Cache
 from app.data.db import DB
 from app.data.fx import load_fx_rates
 from app.hql.errors import HQLTickerNotFound
-from app.hql.parsers import parse_money_string
+from app.utils.parsers import parse_money_string
 
 
 class FXService:

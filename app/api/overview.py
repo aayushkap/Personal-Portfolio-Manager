@@ -5,7 +5,6 @@ from app.api.deps import get_overview_module
 from app.services.overview import OverviewModule
 from app.services.filters import PortfolioFilters, DateRange
 
-
 router = APIRouter(prefix="/overview", tags=["Overview"])
 
 

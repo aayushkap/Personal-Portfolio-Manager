@@ -7,7 +7,7 @@ from typing import Any
 
 import pandas as pd
 
-from app.hql.parsers import (
+from app.utils.parsers import (
     parse_any_stat,
     parse_date,
 )

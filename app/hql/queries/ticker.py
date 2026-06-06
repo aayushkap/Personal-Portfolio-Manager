@@ -15,7 +15,7 @@ from app.hql.queries.__init__ import (
     _statistics_sections,
     _first_purchase_detail,
 )
-from app.hql.parsers import (
+from app.utils.parsers import (
     parse_money_string,
     parse_any_stat,
     parse_mixed_stat,
@@ -258,7 +258,7 @@ class TickerQuery:
             - values: float (AED close price)
         """
         start_date, end_date = _coerce_date_range(days=days, start=start, end=end)
-        return self.price_repo.get_close_series(
+        return self.price_repo.get_ohlcv(
             self.ticker, start_date, end_date, granularity=granularity
         )
 

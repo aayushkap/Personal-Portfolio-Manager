@@ -90,6 +90,13 @@ class StockAnalysisScraper:
         except Exception:
             return None
 
+    def _get_base_url(self, exchange: str, symbol: str) -> str:
+        """Determine the correct base URL structure based on the exchange."""
+        us_exchanges = {"NYSE", "NASDAQ", "AMEX", "OTC", "BATS"}
+        if exchange.upper() in us_exchanges:
+            return f"https://stockanalysis.com/stocks/{symbol.lower()}"
+        return f"https://stockanalysis.com/quote/{exchange.lower()}/{symbol.lower()}"
+
     async def _safe_goto(
         self, page: Page, url: str, wait_for: str = "domcontentloaded"
     ) -> None:
@@ -131,14 +138,12 @@ class StockAnalysisScraper:
         await Stealth().apply_stealth_async(context)
 
         # Spoof additional fingerprint signals
-        await context.add_init_script(
-            """
+        await context.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
             Object.defineProperty(navigator, 'plugins',   { get: () => [1, 2, 3, 4, 5] });
             Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
             window.chrome = { runtime: {} };
-            """
-        )
+            """)
 
         return context
 
@@ -147,7 +152,7 @@ class StockAnalysisScraper:
         self, page: Page, exchange: str, symbol: str
     ) -> Dict[str, Any]:
         """Scrape the overview page (price, change, key stats)."""
-        url = f"https://stockanalysis.com/quote/{exchange}/{symbol}/"
+        url = f"{self._get_base_url(exchange, symbol)}/"
 
         logger.info(f"Scraping overview for ticker: \t {exchange}:{symbol}")
 
@@ -212,7 +217,7 @@ class StockAnalysisScraper:
         self, page: Page, exchange: str, symbol: str
     ) -> Dict[str, Any]:
         """Scrape the financials table (income statement / balance sheet)."""
-        url = f"https://stockanalysis.com/quote/{exchange}/{symbol}/financials/"
+        url = f"{self._get_base_url(exchange, symbol)}/financials/"
 
         logger.info(f"Scraping financials for ticker: \t {exchange}:{symbol}")
 
@@ -264,7 +269,7 @@ class StockAnalysisScraper:
         self, page: Page, exchange: str, symbol: str
     ) -> Dict[str, Any]:
         """Scrape the dividend history table."""
-        url = f"https://stockanalysis.com/quote/{exchange}/{symbol}/dividend/"
+        url = f"{self._get_base_url(exchange, symbol)}/dividend/"
 
         logger.info(f"Scraping dividends for ticker: \t {exchange}:{symbol}")
 
@@ -321,7 +326,7 @@ class StockAnalysisScraper:
         self, page: Page, exchange: str, symbol: str
     ) -> Dict[str, Any]:
         """Scrape the statistics page (detailed ratios and metrics)."""
-        url = f"https://stockanalysis.com/quote/{exchange}/{symbol}/statistics/"
+        url = f"{self._get_base_url(exchange, symbol)}/statistics/"
 
         logger.info(f"Scraping statistics for ticker: \t {exchange}:{symbol}")
 
@@ -408,7 +413,7 @@ class StockAnalysisScraper:
         self, page: Page, exchange: str, symbol: str
     ) -> Dict[str, Any]:
         """Scrape the financial ratios page (historical time series)."""
-        url = f"https://stockanalysis.com/quote/{exchange}/{symbol}/financials/ratios/"
+        url = f"{self._get_base_url(exchange, symbol)}/financials/ratios/"
 
         logger.info(f"Scraping ratios for ticker: \t {exchange}:{symbol}")
 
@@ -556,8 +561,8 @@ class StockAnalysisScraper:
 
 
 async def main():
-    obj = StockAnalysisScraper()
-    res = await obj.scrape({"exchange": "DFM", "symbol": "EMAAR"})
+    obj = StockAnalysisScraper(headless=False)
+    res = await obj.scrape({"exchange": "NYSE", "symbol": "RDDT"})
     import json
 
     with open("filename.json", "w") as f:

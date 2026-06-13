@@ -190,7 +190,7 @@ async def main():
     scheduler.add_job(
         watchlist_screening_job,
         "cron",
-        day_of_week="mon-sat",
+        day="*/2",
         hour=18,
         minute=0,
         timezone="Asia/Dubai",
@@ -200,9 +200,9 @@ async def main():
     )
 
     scheduler.start()
-    # await fundamentals_job()
-    # await fx_job()
-    # await ohlc_job(bars=2000)
+    await fundamentals_job()
+    await fx_job()
+    await ohlc_job(bars=2000)
     # await quote_job()
     # await watchlist_screening_job()
 

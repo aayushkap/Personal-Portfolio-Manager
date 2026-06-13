@@ -46,33 +46,33 @@ BENCHMARKS: dict[str, dict] = {
         "symbol": "US10Y",
         "type": "index",
     },
-    "NYSE/NYSEARCA:XLE": {
+    "AMEX/NYSEARCA:XLE": {
         "label": "Energy Select Sector SPDR Fund",
-        "exchange": "NYSE",
+        "exchange": "AMEX",
         "symbol": "XLE",
         "type": "etf",
     },
-    "NYSE/NYSEARCA:XLF": {
+    "AMEX/NYSEARCA:XLF": {
         "label": "Financial Select Sector SPDR Fund",
-        "exchange": "NYSE",
+        "exchange": "AMEX",
         "symbol": "XLF",
         "type": "etf",
     },
-    "NYSE/NYSEARCA:XLK": {
+    "AMEX/NYSEARCA:XLK": {
         "label": "Technology Select Sector SPDR Fund",
-        "exchange": "NYSE",
+        "exchange": "AMEX",
         "symbol": "XLK",
         "type": "etf",
     },
-    "NYSE/NYSEARCA:XLRE": {
+    "AMEX/NYSEARCA:XLRE": {
         "label": "Real Estate Select Sector SPDR Fund",
-        "exchange": "NYSE",
+        "exchange": "AMEX",
         "symbol": "XLRE",
         "type": "etf",
     },
-    "NYSE/NYSEARCA:XLU": {
+    "AMEX/NYSEARCA:XLU": {
         "label": "Utilities Select Sector SPDR Fund",
-        "exchange": "NYSE",
+        "exchange": "AMEX",
         "symbol": "XLU",
         "type": "etf",
     },

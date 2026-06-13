@@ -11,7 +11,6 @@ from app.core.logger import get_logger
 from app.services.base import BaseModule
 from app.utils.fin import parse_money, safe_float as _safe
 from app.services.watchlist_ai import WatchlistAIScreener
-from app.hql.repositories import PriceRepository
 
 logger = get_logger()
 

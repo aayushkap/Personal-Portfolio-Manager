@@ -106,7 +106,7 @@ class OverlayResolver:
         tx = tx.copy()
         tx["date_parsed"] = pd.to_datetime(tx["date"], errors="coerce").dt.date
 
-        start = filters.date_range.start
+        # start = filters.date_range.start
         end = filters.date_range.end
 
         # Always include transactions before the window for correct cost basis

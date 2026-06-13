@@ -60,5 +60,3 @@ def get_portfolio_schema() -> str:
         lines.append(f"{doc}\n")
 
     return "\n".join(lines)
-
-

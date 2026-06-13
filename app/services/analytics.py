@@ -10,7 +10,6 @@ import pandas as pd
 
 from app.core.logger import get_logger
 from app.services.base import BaseModule
-from app.services.filters import PortfolioFilters
 
 logger = get_logger()
 
@@ -74,7 +73,7 @@ class AnalyticsModule(BaseModule):
         sell_proceeds = sells.groupby("ticker")["total_cost_aed"].sum()
 
         # sector/exchange meta — first transaction per ticker
-        meta_cols = ["ticker", "sector", "exchange"]
+        # meta_cols = ["ticker", "sector", "exchange"]
         ticker_meta = tx_df.drop_duplicates("ticker").set_index("ticker")[
             ["sector", "exchange"]
         ]

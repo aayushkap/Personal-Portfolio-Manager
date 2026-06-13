@@ -86,10 +86,10 @@ class WatchlistQuery:
             # Base metadata
             try:
                 raw = self.cache_repo.get_raw_ticker(ticker)
-                currency = self.cache_repo.resolve_currency(raw)
+                # currency = self.cache_repo.resolve_currency(raw)
             except Exception:
                 raw = {}
-                currency = "AED"
+                # currency = "AED"
 
             # Latest price snapshot
             latest = self.price_repo.get_latest_price(ticker)

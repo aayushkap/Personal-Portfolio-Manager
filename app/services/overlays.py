@@ -244,12 +244,19 @@ class OverlayResolver:
 
         # Slice and rebase to window start
         window_start = pd.Timestamp(filters.date_range.start, tz="Asia/Dubai")
+        window_end = pd.Timestamp(filters.date_range.end, tz="Asia/Dubai")
         window_mask = trading_days >= window_start
         twr_window = twr_cumulative[window_mask]
         twr_window = twr_window - twr_window.iloc[0]
 
         window_start_val = portfolio_mv[window_mask].iloc[0]
         twr_aed = window_start_val * (1 + twr_window / 100)
+
+        # Expand to every calendar day and forward-fill over weekends/holidays
+        calendar_days = pd.date_range(
+            twr_aed.index[0], window_end, freq="D", tz="Asia/Dubai"
+        )
+        twr_aed = twr_aed.reindex(calendar_days).ffill()
 
         return twr_aed.rename("TWR")
 

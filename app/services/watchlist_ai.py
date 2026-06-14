@@ -22,11 +22,8 @@ for each condition. Do not evaluate from memory alone.
 Ticker: {ticker}
 Analyst thesis: {note}
 
-Critical conditions (ALL must be met for ready_to_buy = true):
-{critical_conditions}
-
-Bonus conditions (nice to have, do NOT affect ready_to_buy):
-{bonus_conditions}
+All criteria, critical & good to have: (For the critical criteria, all must be met for ready_to_buy = true):
+{criteria}
 
 Current data (from internal systems):
 - Price: {price}
@@ -162,17 +159,16 @@ class WatchlistAIScreener:
         criteria = item["criteria"]
         price = item.get("current_price")
 
-        criticals, bonuses = _parse_conditions(criteria)
+        # criticals, bonuses = _parse_conditions(criteria)
 
-        if not criticals and not bonuses:
-            logger.warning("%s: no parseable conditions found in criteria", ticker)
-            return None
+        # if not criticals and not bonuses:
+        #     logger.warning("%s: no parseable conditions found in criteria", ticker)
+        #     return None
 
         prompt = _EVALUATOR_PROMPT.format(
             ticker=ticker,
             note=note,
-            critical_conditions="\n".join(f"- {c}" for c in criticals) or "(none)",
-            bonus_conditions="\n".join(f"- {b}" for b in bonuses) or "(none)",
+            criteria=str(criteria),
             price=price or "unknown",
             fundamentals=(
                 json.dumps(fundamentals, default=str) if fundamentals else "{}"

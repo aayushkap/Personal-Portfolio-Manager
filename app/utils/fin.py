@@ -25,6 +25,10 @@ def parse_money(value: Optional[str]) -> tuple[float, str]:
 
 
 def safe_float(v) -> Optional[float]:
-    if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+    if v is None:
         return None
-    return v
+    try:
+        n = float(v)
+        return None if (math.isnan(n) or math.isinf(n)) else n
+    except (TypeError, ValueError):
+        return None

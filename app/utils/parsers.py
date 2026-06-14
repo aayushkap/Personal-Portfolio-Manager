@@ -22,22 +22,29 @@ def parse_date(value: Any) -> date | None:
 def parse_number(value: Any) -> float | None:
     if value is None:
         return None
+    if isinstance(value, float):
+        return None if (math.isnan(value) or math.isinf(value)) else value
     s = str(value).strip().replace(",", "")
-    if s in {"", "-", "n/a", "None"}:
+    if s in {"", "-", "n/a", "N/A", "None", "nan", "inf", "-inf"}:
         return None
     try:
-        return float(s)
+        n = float(s)
+        return None if (math.isnan(n) or math.isinf(n)) else n
     except ValueError:
         return None
 
 
 def parse_percent(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, float):
+        return None if (math.isnan(value) or math.isinf(value)) else value
     s = str(value).strip()
-    if not s or s in {"-", "n/a", "None"}:
+    if not s or s in {"-", "n/a", "N/A", "None", "nan"}:
         return None
     if s.endswith("%"):
         n = parse_number(s[:-1])
-        return n / 100 if n is not None else None
+        return None if n is None else n / 100
     return None
 
 

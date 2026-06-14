@@ -17,6 +17,29 @@ logger = get_logger()
 
 
 class OverviewModule(BaseModule):
+    def _resolve_tickers(
+        self,
+        tickers: list[str] | None,
+        sectors: list[str] | None,
+    ) -> list[str] | None:
+        """Resolve sectors → tickers and merge with any explicit ticker filter."""
+        if not sectors:
+            return tickers or None
+
+        tx = self.hql.portfolio().transactions()
+        if tx.empty:
+            return tickers or None
+
+        sector_tickers = set(
+            tx[tx["sector"].str.lower().isin([s.lower() for s in sectors])]["ticker"]
+        )
+
+        if tickers:
+            # Intersection: must satisfy both ticker AND sector filter
+            return list(sector_tickers & set(tickers)) or None
+
+        return list(sector_tickers) or None
+
     def get_overview(
         self,
         filters: PortfolioFilters,
@@ -26,6 +49,8 @@ class OverviewModule(BaseModule):
             start_date=filters.date_range.start,
             end_date=filters.date_range.end,
             include_events=include_events,
+            tickers=filters.tickers,
+            sectors=filters.sectors,
         )
 
         # Overlays stay in the service layer as they pull external ticker
@@ -44,6 +69,8 @@ class OverviewModule(BaseModule):
         start_date: date | None = None,
         end_date: date | None = None,
         include_events: bool = False,
+        tickers: list[str] | None = None,
+        sectors: list[str] | None = None,
     ) -> dict:
         """
             Returns a structured overview of portfolio performance.
@@ -103,7 +130,11 @@ class OverviewModule(BaseModule):
 
         p = self.hql.portfolio()
 
-        trend_df = p.value(start_date=start_date, end_date=end_date)
+        tickers = self._resolve_tickers(tickers, sectors)
+
+        trend_df = p.value(
+            start_date=start_date, end_date=end_date, tickers=tickers or None
+        )
 
         if trend_df.empty:
             return {"summary": None, "trend": [], "events": []}
@@ -140,7 +171,7 @@ class OverviewModule(BaseModule):
         total_return = round(total_val - total_inv, 2)
 
         def _pct(gain: float, base: float) -> float:
-            return round(gain / base * 100, 2) if base else 0.0
+            return round(gain / base * 100, 2) if base > 0 else 0.0
 
         summary = {
             "total_invested": round(total_inv, 2),

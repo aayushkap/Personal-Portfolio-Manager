@@ -337,6 +337,7 @@ class PortfolioQuery:
         start_date: date | None = None,
         end_date: date | None = None,
         granularity: str = "1D",
+        tickers: list[str] | None = None,
     ) -> pd.DataFrame:
         """
             Calculates the historical daily portfolio value broken into three components.
@@ -371,6 +372,8 @@ class PortfolioQuery:
                 End of the window. Defaults to today.
             granularity : str
                 Resampling granularity. Default "1D".
+            tickers : list
+                Filter by list of tickers
 
             Returns
         -
@@ -383,6 +386,8 @@ class PortfolioQuery:
         )
 
         tx = self.transactions()
+        if tickers:
+            tx = tx[tx["ticker"].isin(tickers)]
         if tx.empty:
             return empty
 
@@ -410,6 +415,7 @@ class PortfolioQuery:
             .sum()
             .reindex(timeline, fill_value=0)
             .cumsum()
+            .clip(lower=0)
         )
 
         # Cumulative realized P&L from closed positions
@@ -457,6 +463,8 @@ class PortfolioQuery:
         daily_div = pd.Series(0.0, index=timeline)
         if not divs.empty:
             received = divs[divs["status"] == "received"]
+            if tickers:
+                received = received[received["ticker"].isin(tickers)]
             if not received.empty:
                 div_by_day = received.groupby("pay_date")["total_aed"].sum()
                 for pay_date, amount in div_by_day.items():

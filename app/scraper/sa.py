@@ -17,6 +17,31 @@ from app.core.logger import get_logger
 logger = get_logger()
 
 
+def retriable(retries: int = 2, delay: float = 30.0):
+    def decorator(fn):
+        async def wrapper(*args, **kwargs):
+            last_exc = None
+            for attempt in range(retries + 1):
+                try:
+                    return await fn(*args, **kwargs)
+                except Exception as exc:
+                    last_exc = exc
+                    if attempt < retries:
+                        logger.warning(
+                            "%s attempt %d failed: %s — retrying in %.0fs",
+                            fn.__name__,
+                            attempt + 1,
+                            exc,
+                            delay,
+                        )
+                        await asyncio.sleep(delay)
+            raise last_exc
+
+        return wrapper
+
+    return decorator
+
+
 class StockAnalysisScraper:
     """
     Scraper for StockAnalysis.com that collects financial data for a list of tickers.
@@ -148,6 +173,7 @@ class StockAnalysisScraper:
         return context
 
     # Page‑specific scraping methods
+    @retriable(retries=2, delay=30.0)
     async def _scrape_overview(
         self, page: Page, exchange: str, symbol: str
     ) -> Dict[str, Any]:
@@ -213,11 +239,14 @@ class StockAnalysisScraper:
         await self._jitter(0.8, 1.5)
         return data
 
+    @retriable(retries=2, delay=30.0)
     async def _scrape_financials(
         self, page: Page, exchange: str, symbol: str
     ) -> Dict[str, Any]:
         """Scrape the financials table (income statement / balance sheet)."""
         url = f"{self._get_base_url(exchange, symbol)}/financials/"
+
+        raise Exception("test")
 
         logger.info(f"Scraping financials for ticker: \t {exchange}:{symbol}")
 

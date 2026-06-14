@@ -7,6 +7,7 @@ from app.api.deps import get_holdings_module
 from app.services.holdings import HoldingsModule
 from app.services.filters import PortfolioFilters, DateRange
 from datetime import date
+from app.utils.parsers import sanitize_for_json
 
 router = APIRouter(prefix="/holdings", tags=["Holdings"])
 
@@ -41,15 +42,8 @@ def get_holding_detail(
     timeframe: str = Query("1m", pattern="^(1d|1w|1m|3m|6m|1y|5y|all)$"),
     module: HoldingsModule = Depends(get_holdings_module),
 ):
-    """
-    Detailed view for a single holding.
-    Returns:
-    - chart:        OHLCV bars for selected timeframe (1d/1w/1m/3m/all)
-    - transactions: buys, sells, dividends received — chronological
-    - fundamentals: key company metrics from cache
-    """
-    print(f"timeframe: {timeframe}")
-    return module.get_holding_detail(
+    result = module.get_holding_detail(
         ticker=ticker.upper(),
         timeframe=timeframe,
     )
+    return sanitize_for_json(result)

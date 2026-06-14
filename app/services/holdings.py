@@ -12,6 +12,12 @@ from app.services.base import BaseModule
 from app.services.filters import PortfolioFilters
 from app.utils.fin import safe_float as _safe
 
+
+from app.utils.parsers import (
+    parse_number,
+    parse_percent,
+)
+
 logger = get_logger()
 pd.set_option("display.max_rows", None)
 
@@ -245,9 +251,9 @@ class HoldingsModule(BaseModule):
 
     def _build_fundamentals(self, ticker: str) -> dict:
         result = {}
-        t = self.hql.ticker(ticker)  # per-ticker object for all per-ticker methods
+        t = self.hql.ticker(ticker)
 
-        ov = t.overview()  # ticker method, not portfolio
+        ov = t.overview()
         if ov:
             result["snapshot"] = {
                 k: v
@@ -261,15 +267,20 @@ class HoldingsModule(BaseModule):
                     "week_52_low": ov.get("week_52_low"),
                     "week_52_high": ov.get("week_52_high"),
                     "dividend_yield": ov.get("dividend_yield"),
+                    "dividend_per_share": ov.get("dividend_per_share"),
                     "ex_dividend_date": ov.get("ex_dividend_date"),
                     "earnings_date": ov.get("earnings_date"),
                     "analyst_rating": ov.get("analyst_rating"),
                     "price_target": ov.get("price_target"),
+                    "price_target_upside": ov.get("price_target_upside"),
+                    "shares_out": ov.get("shares_out"),
+                    "revenue_ttm": ov.get("revenue_ttm"),
+                    "net_income": ov.get("net_income"),
                 }.items()
                 if v is not None
             }
 
-        stats = t.statistics()  # ticker method
+        stats = t.statistics()
         if stats:
 
             def _s(section, key):
@@ -278,12 +289,13 @@ class HoldingsModule(BaseModule):
             result["valuation"] = {
                 k: v
                 for k, v in {
-                    "pe_ratio": _s("Valuation Ratios", "pe_ratio"),
-                    "forward_pe": _s("Valuation Ratios", "forward_pe"),
-                    "ps_ratio": _s("Valuation Ratios", "ps_ratio"),
-                    "pb_ratio": _s("Valuation Ratios", "pb_ratio"),
-                    "peg_ratio": _s("Valuation Ratios", "peg_ratio"),
+                    "pe_ratio": _s("Valuation Ratios", "PE Ratio"),
+                    "forward_pe": _s("Valuation Ratios", "Forward PE"),
+                    "ps_ratio": _s("Valuation Ratios", "PS Ratio"),
+                    "pb_ratio": _s("Valuation Ratios", "PB Ratio"),
+                    "peg_ratio": _s("Valuation Ratios", "PEG Ratio"),
                     "p_fcf": _s("Valuation Ratios", "P/FCF Ratio"),
+                    "p_ocf": _s("Valuation Ratios", "P/OCF Ratio"),
                 }.items()
                 if v is not None
             }
@@ -291,11 +303,20 @@ class HoldingsModule(BaseModule):
             result["efficiency"] = {
                 k: v
                 for k, v in {
-                    "roe": _s("Financial Efficiency", "roe"),
-                    "roa": _s("Financial Efficiency", "roa"),
-                    "roic": _s("Financial Efficiency", "roic"),
-                    "roce": _s("Financial Efficiency", "roce"),
-                    "wacc": _s("Financial Efficiency", "wacc"),
+                    "roe": _s("Financial Efficiency", "Return on Equity (ROE)"),
+                    "roa": _s("Financial Efficiency", "Return on Assets (ROA)"),
+                    "roic": _s(
+                        "Financial Efficiency", "Return on Invested Capital (ROIC)"
+                    ),
+                    "roce": _s(
+                        "Financial Efficiency", "Return on Capital Employed (ROCE)"
+                    ),
+                    "wacc": _s(
+                        "Financial Efficiency",
+                        "Weighted Average Cost of Capital (WACC)",
+                    ),
+                    "asset_turnover": _s("Financial Efficiency", "Asset Turnover"),
+                    "employees": _s("Financial Efficiency", "Employee Count"),
                 }.items()
                 if v is not None
             }
@@ -306,6 +327,7 @@ class HoldingsModule(BaseModule):
                     "gross_margin": _s("Margins", "Gross Margin"),
                     "operating_margin": _s("Margins", "Operating Margin"),
                     "profit_margin": _s("Margins", "Profit Margin"),
+                    "ebitda_margin": _s("Margins", "EBITDA Margin"),
                     "fcf_margin": _s("Margins", "FCF Margin"),
                 }.items()
                 if v is not None
@@ -314,10 +336,11 @@ class HoldingsModule(BaseModule):
             result["balance_sheet"] = {
                 k: v
                 for k, v in {
-                    "total_assets": _s("Balance Sheet", "Total Assets"),
                     "total_debt": _s("Balance Sheet", "Total Debt"),
                     "net_cash": _s("Balance Sheet", "Net Cash"),
+                    "net_cash_ps": _s("Balance Sheet", "Net Cash Per Share"),
                     "book_value": _s("Balance Sheet", "Equity (Book Value)"),
+                    "book_value_ps": _s("Balance Sheet", "Book Value Per Share"),
                     "working_capital": _s("Balance Sheet", "Working Capital"),
                 }.items()
                 if v is not None
@@ -359,8 +382,22 @@ class HoldingsModule(BaseModule):
                 if v is not None
             }
 
-        result["growth_trends"] = _parse_growth_trends(t.financials())  # ticker method
-        result["ratio_trends"] = _parse_ratio_trends(t.ratios())  # ticker method
+            result["dividends_yields"] = {
+                k: v
+                for k, v in {
+                    "dividend_per_share": _s(
+                        "Dividends & Yields", "Dividend Per Share"
+                    ),
+                    "dividend_yield": _s("Dividends & Yields", "Dividend Yield"),
+                    "payout_ratio": _s("Dividends & Yields", "Payout Ratio"),
+                    "earnings_yield": _s("Dividends & Yields", "Earnings Yield"),
+                    "fcf_yield": _s("Dividends & Yields", "FCF Yield"),
+                }.items()
+                if v is not None
+            }
+
+        result["growth_trends"] = _parse_growth_trends(t.financials())
+        result["ratio_trends"] = _parse_ratio_trends(t.ratios())
 
         return result
 
@@ -403,20 +440,38 @@ def _parse_growth_trends(financials_df: pd.DataFrame) -> dict:
         "Free Cash Flow Margin": "fcf_margin",
         "Dividend Per Share": "dividend_per_share",
     }
+    PCT_KEYS = {
+        "revenue_growth",
+        "net_income_growth",
+        "profit_margin",
+        "ebitda_margin",
+        "fcf_margin",
+    }
+
     if financials_df is None or (
         hasattr(financials_df, "empty") and financials_df.empty
     ):
         return {}
+
     out = {}
     for label, key in WANTED.items():
-        if label in financials_df.index:
-            row = financials_df.loc[label]
-            out[key] = {
-                col: _clean_str(val)
-                for col, val in row.items()
-                if str(col).startswith("FY") and val not in (None, "-", "")
-            }
-    return {k: v for k, v in out.items() if v}
+        if label not in financials_df.index:
+            continue
+        row = financials_df.loc[label]
+        parsed = {}
+        for col, val in row.items():
+            if not str(col).startswith("FY"):
+                continue
+            s = _clean_str(str(val) if val is not None else None)
+            if not s or s == "-":
+                continue
+            n = parse_percent(s) if key in PCT_KEYS else parse_number(s)
+            if n is not None:
+                parsed[col] = n
+        if parsed:
+            out[key] = parsed
+
+    return out
 
 
 def _parse_ratio_trends(ratios_df: pd.DataFrame) -> dict:
@@ -427,20 +482,45 @@ def _parse_ratio_trends(ratios_df: pd.DataFrame) -> dict:
         "EV/EBITDA Ratio": "ev_ebitda",
         "Return on Equity (ROE)": "roe",
         "Return on Assets (ROA)": "roa",
+        "Return on Invested Capital (ROIC)": "roic",
+        "Return on Capital Employed (ROCE)": "roce",
         "Debt / Equity Ratio": "debt_equity",
         "Current Ratio": "current_ratio",
         "Dividend Yield": "dividend_yield",
         "Payout Ratio": "payout_ratio",
+        "Earnings Yield": "earnings_yield",
+        "FCF Yield": "fcf_yield",
     }
+    PCT_KEYS = {
+        "roe",
+        "roa",
+        "roic",
+        "roce",
+        "dividend_yield",
+        "payout_ratio",
+        "earnings_yield",
+        "fcf_yield",
+    }
+
     if ratios_df is None or (hasattr(ratios_df, "empty") and ratios_df.empty):
         return {}
+
     out = {}
     for label, key in WANTED.items():
-        if label in ratios_df.index:
-            row = ratios_df.loc[label]
-            out[key] = {
-                col: _clean_str(val)
-                for col, val in row.items()
-                if col not in (None, "") and val not in (None, "-", "")
-            }
-    return {k: v for k, v in out.items() if v}
+        if label not in ratios_df.index:
+            continue
+        row = ratios_df.loc[label]
+        parsed = {}
+        for col, val in row.items():
+            if col in (None, "", "Fiscal Year"):
+                continue
+            s = _clean_str(str(val) if val is not None else None)
+            if not s or s == "-":
+                continue
+            n = parse_percent(s) if key in PCT_KEYS else parse_number(s)
+            if n is not None:
+                parsed[col] = n
+        if parsed:
+            out[key] = parsed
+
+    return out

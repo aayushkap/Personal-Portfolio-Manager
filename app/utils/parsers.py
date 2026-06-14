@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from datetime import date
 from typing import Any
+import math
 
 _SUFFIXES = {"K": 1e3, "M": 1e6, "B": 1e9, "T": 1e12}
 
@@ -117,3 +118,14 @@ def parse_any_stat(value: Any) -> Any:
     if re.fullmatch(r"[-+]?[\d,.]+", s.replace(",", "")):
         return parse_number(s)
     return s
+
+
+def sanitize_for_json(obj: Any) -> Any:
+    """Recursively walk dicts/lists and replace nan/inf floats with None."""
+    if isinstance(obj, float):
+        return None if (math.isnan(obj) or math.isinf(obj)) else obj
+    if isinstance(obj, dict):
+        return {k: sanitize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [sanitize_for_json(v) for v in obj]
+    return obj

@@ -37,6 +37,7 @@ class PerformanceRequest(BaseModel):
     sectors: Optional[List[str]] = None
     include_events: bool = False
     overlays: List[str] = Field(default_factory=list)
+    breakdown: bool = False
 
 
 class DateRangeRequest(BaseModel):

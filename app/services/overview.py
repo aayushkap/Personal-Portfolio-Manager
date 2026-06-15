@@ -44,6 +44,7 @@ class OverviewModule(BaseModule):
         self,
         filters: PortfolioFilters,
         include_events: bool = False,
+        breakdown: bool = False,
     ) -> dict:
         result = self._get_overview(
             start_date=filters.date_range.start,
@@ -53,15 +54,42 @@ class OverviewModule(BaseModule):
             sectors=filters.sectors,
         )
 
-        # Overlays stay in the service layer as they pull external ticker
-        # data that doesn't belong inside the portfolio domain
-        if filters.overlays and result["trend"]:
+        if not result["trend"]:
+            return result
+
+        trend_by_date = {row["date"]: row for row in result["trend"]}
+
+        # Overlays
+        if filters.overlays:
             resolved = OverlayResolver(self).resolve_many(filters.overlays, filters)
-            trend_by_date = {row["date"]: row for row in result["trend"]}
             for key, records in resolved.items():
                 for r in records:
                     if r["date"] in trend_by_date:
                         trend_by_date[r["date"]][key.lower()] = r["value"]
+
+        # Breakdown: per-ticker market_value injected as ticker-keyed dynamic series
+        if breakdown and filters.tickers:
+            for ticker in filters.tickers:
+                ticker_df = self.hql.portfolio().value(
+                    start_date=filters.date_range.start,
+                    end_date=filters.date_range.end,
+                    tickers=[ticker],
+                )
+                if ticker_df.empty:
+                    continue
+                for ts, row in ticker_df.iterrows():
+                    date_str = ts.strftime("%Y-%m-%d")
+                    if date_str in trend_by_date:
+                        trend_by_date[date_str][ticker] = round(
+                            float(row["market_value_aed"]), 2
+                        )
+
+            # Strip the static aggregate lines so the frontend only renders per-ticker series
+            for row in result["trend"]:
+                row.pop("total_invested", None)
+                row.pop("market_value", None)
+                row.pop("total_return", None)
+
         return result
 
     def _get_overview(

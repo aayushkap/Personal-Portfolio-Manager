@@ -20,4 +20,6 @@ async def get_overview(
         overlays=body.overlays,
     )
 
-    return module.get_overview(filters, include_events=body.include_events)
+    return module.get_overview(
+        filters, include_events=body.include_events, breakdown=body.breakdown
+    )

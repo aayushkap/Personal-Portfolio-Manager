@@ -11,29 +11,26 @@ cd "$APP_DIR"
 echo "[INFO] Starting CI/CD restart..."
 
 # --- Kill existing Python processes (graceful -> force) ---
+# --- Kill existing Python processes (graceful -> force) ---
 echo "[INFO] Stopping existing Python processes..."
-
-pkill -15 -f "python" || true
+pkill -15 -u ubuntu -f "uvicorn" || true
 sleep 2
-
-if pgrep -f "python" > /dev/null; then
-    echo "[WARN] Force killing remaining Python processes..."
-    pkill -9 -f "python" || true
+if pgrep -u ubuntu -f "uvicorn" > /dev/null; then
+    echo "[WARN] Force killing remaining uvicorn processes..."
+    pkill -9 -u ubuntu -f "uvicorn" || true
 fi
-
 # Ensure all are dead
 TRIES=0
-while pgrep -f "python" > /dev/null; do
+while pgrep -u ubuntu -f "uvicorn" > /dev/null; do
     if [ $TRIES -ge 5 ]; then
-        echo "[ERROR] Some Python processes refused to terminate:"
-        pgrep -af python
+        echo "[ERROR] Some processes refused to terminate:"
+        pgrep -u ubuntu -af uvicorn
         exit 1
     fi
     sleep 1
     ((TRIES++))
 done
-
-echo "[INFO] All Python processes stopped."
+echo "[INFO] All uvicorn processes stopped."
 
 # --- Activate virtual environment ---
 echo "[INFO] Activating virtual environment..."

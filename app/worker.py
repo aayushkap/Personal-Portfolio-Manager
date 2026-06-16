@@ -1,6 +1,7 @@
 # app/worker.py
 
 import asyncio
+import hashlib
 from collections import defaultdict
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import app.config  # noqa
@@ -61,11 +62,19 @@ async def ohlc_job(bars: int = 100):
         logger.exception("OHLC job failed")
 
 
-async def fundamentals_job():
-    logger.info("Fundamentals job starting | now=%s", dubai_now().isoformat())
+def _ticker_bucket(key: str, num_buckets: int = 4) -> int:
+    return int(hashlib.md5(key.encode()).hexdigest(), 16) % num_buckets
+
+
+async def fundamentals_job(bucket: int):
+    logger.info(
+        "Fundamentals job starting | bucket=%d | now=%s",
+        bucket,
+        dubai_now().isoformat(),
+    )
     try:
         gs = GSheet_Manager()
-        transactions = gs.fetch_transactions()  #
+        transactions = gs.fetch_transactions()
         watchlist = gs.fetch_watchlist()
 
         # Group transactions by canonical key, watchlist items have no purchases
@@ -85,13 +94,17 @@ async def fundamentals_job():
                 grouped[key]["ticker_info"] = item
                 grouped[key]["purchases"] = []
 
+        # Only process tickers assigned to this bucket
+        bucket_keys = [k for k in grouped if _ticker_bucket(k) == bucket]
+        logger.info("Bucket %d: %d/%d tickers", bucket, len(bucket_keys), len(grouped))
+
         obj = StockAnalysisScraper()
         cache = Cache()
 
-        for key, data in grouped.items():
+        for key in bucket_keys:
+            data = grouped[key]
             info = data["ticker_info"]
             try:
-                # SA scraper gets sa_exchange so it hits the right URL
                 scrape = await obj.scrape(
                     {
                         "exchange": info["sa_exchange"],
@@ -99,7 +112,6 @@ async def fundamentals_job():
                     }
                 )
                 scrape["purchase_details"] = data["purchases"]
-                # Always save under the canonical TV key
                 cache.save(key, scrape)
                 logger.info("Fundamentals saved: %s (sa=%s)", key, info["sa_exchange"])
             except Exception:
@@ -154,13 +166,51 @@ async def main():
         max_instances=1,
         misfire_grace_time=120,
     )
+
+    # Buckets 0 and 1 run on even days-of-month, buckets 2 and 3 on odd days.
+    # Two slots per day (1 AM and 5 AM) keep each session small and finish
+    # well before the 10 AM busy window. Every ticker is refreshed every ~2 days.
     scheduler.add_job(
         fundamentals_job,
         "cron",
-        day_of_week="mon-fri",
-        hour=0,
-        minute=5,
-        id="fundamentals_daily",
+        args=[0],
+        day="2-30/2",
+        hour=1,
+        minute=0,
+        id="fundamentals_bucket_0",
+        max_instances=1,
+        misfire_grace_time=300,
+    )
+    scheduler.add_job(
+        fundamentals_job,
+        "cron",
+        args=[1],
+        day="2-30/2",
+        hour=5,
+        minute=0,
+        id="fundamentals_bucket_1",
+        max_instances=1,
+        misfire_grace_time=300,
+    )
+    scheduler.add_job(
+        fundamentals_job,
+        "cron",
+        args=[2],
+        day="1-31/2",
+        hour=1,
+        minute=0,
+        id="fundamentals_bucket_2",
+        max_instances=1,
+        misfire_grace_time=300,
+    )
+    scheduler.add_job(
+        fundamentals_job,
+        "cron",
+        args=[3],
+        day="1-31/2",
+        hour=5,
+        minute=0,
+        id="fundamentals_bucket_3",
         max_instances=1,
         misfire_grace_time=300,
     )

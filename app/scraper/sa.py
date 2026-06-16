@@ -246,8 +246,6 @@ class StockAnalysisScraper:
         """Scrape the financials table (income statement / balance sheet)."""
         url = f"{self._get_base_url(exchange, symbol)}/financials/"
 
-        raise Exception("test")
-
         logger.info(f"Scraping financials for ticker: \t {exchange}:{symbol}")
 
         await self._safe_goto(page, url)

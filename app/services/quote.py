@@ -200,7 +200,7 @@ Go to the edge of the source. Find what's buried.
 Hard rules:
 - Real quote or real literary/mythic line with a genuine source
 - Use "Anonymous" only when origin is genuinely unknown
-- DO NOT return this quote: "{previous_quote}"
+- DO NOT return this quote ( or anything similar ): "{previous_quote}"
 - Author field: be specific — name the person, the work, the context if needed
 
 Return ONLY valid JSON. Nothing else. No preamble. No explanation. No markdown."""

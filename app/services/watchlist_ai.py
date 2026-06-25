@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 from google import genai
@@ -30,6 +30,7 @@ Current data (from internal systems):
 - Fundamentals: {fundamentals}
 
 Today: {today}
+Max next_check_date allowed: {max_check_date}
 
 Instructions:
 - Search specifically for each condition. Do not batch them into one search.
@@ -38,67 +39,21 @@ Instructions:
   latest value.
 - One short, direct sentence per condition note. No essays. No filler.
 - Set ready_to_buy = true ONLY if every critical condition is met.
+- Set next_check_date to the earliest date when new relevant information is
+  expected (earnings, macro print, catalyst event). If nothing specific is
+  known, use day-after-tomorrow. Never exceed {max_check_date}. Format: YYYY-MM-DD.
 
 Return your response as a JSON object wrapped in a ```json code block. \
 Use this exact structure:
 ```json
 {{
   "ready_to_buy": false,
+  "next_check_date": "{tomorrow}",
   "critical_conditions": [{{"condition": "...", "met": false, "note": "..."}}],
   "bonus_conditions": [{{"condition": "...", "met": false, "note": "..."}}]
 }}
+```
 """
-
-
-def _parse_conditions(criteria: str) -> tuple[list[str], list[str]]:
-    """
-    Split raw criteria text into critical and bonus condition lists.
-    Handles both "Critical (Must-Haves)" / "Good to Have (Bonuses)" and
-    "Must Have" / "Good to Have" / "Critical conditions" heading variants.
-    """
-    import re
-
-    critical_headers = re.compile(
-        r"(?i)(critical\s*(conditions?|must.?haves?)?|must.?haves?)",
-    )
-    bonus_headers = re.compile(
-        r"(?i)(good.?to.?have|bonus(es)?|nice.?to.?have)",
-    )
-
-    lines = criteria.splitlines()
-    current_bucket: list[str] | None = None
-    criticals: list[str] = []
-    bonuses: list[str] = []
-    buffer = ""
-
-    def flush():
-        nonlocal buffer
-        text = buffer.strip()
-        if text:
-            if current_bucket == "critical":
-                criticals.append(text)
-            elif current_bucket == "bonus":
-                bonuses.append(text)
-        buffer = ""
-
-    for line in lines:
-        stripped = line.strip()
-        if not stripped:
-            flush()
-            continue
-        if critical_headers.match(stripped):
-            flush()
-            current_bucket = "critical"
-            continue
-        if bonus_headers.match(stripped):
-            flush()
-            current_bucket = "bonus"
-            continue
-        if current_bucket:
-            buffer += (" " if buffer else "") + stripped
-
-    flush()
-    return criticals, bonuses
 
 
 class WatchlistAIScreener:
@@ -159,11 +114,9 @@ class WatchlistAIScreener:
         criteria = item["criteria"]
         price = item.get("current_price")
 
-        # criticals, bonuses = _parse_conditions(criteria)
-
-        # if not criticals and not bonuses:
-        #     logger.warning("%s: no parseable conditions found in criteria", ticker)
-        #     return None
+        today = date.today()
+        tomorrow = (today + timedelta(days=2)).isoformat()
+        max_check_date = (today + timedelta(days=14)).isoformat()
 
         prompt = _EVALUATOR_PROMPT.format(
             ticker=ticker,
@@ -173,7 +126,9 @@ class WatchlistAIScreener:
             fundamentals=(
                 json.dumps(fundamentals, default=str) if fundamentals else "{}"
             ),
-            today=date.today().isoformat(),
+            today=today.isoformat(),
+            tomorrow=tomorrow,
+            max_check_date=max_check_date,
         )
 
         response = self.client.models.generate_content(
@@ -190,19 +145,35 @@ class WatchlistAIScreener:
             logger.error("%s: failed to extract JSON from grounded response", ticker)
             return None
 
+        # Parse and clamp next_check_date
+        raw_next = result.get("next_check_date", tomorrow)
+        try:
+            parsed = date.fromisoformat(raw_next)
+            parsed = max(parsed, today + timedelta(days=2))  # at least tomorrow
+            parsed = min(parsed, today + timedelta(days=14))  # hard cap
+        except (ValueError, TypeError):
+            parsed = today + timedelta(days=1)
+        next_check_date = parsed.isoformat()
+
         search_queries: list[str] = []
         try:
-            meta = response.candidates[0].grounding_metadata
+            meta = response.candidates.grounding_metadata
             if meta and meta.web_search_queries:
                 search_queries = list(meta.web_search_queries)
         except Exception:
             pass
 
-        logger.info("%s → grounded searches: %s", ticker, search_queries)
+        logger.info(
+            "%s → next_check: %s | searches: %s",
+            ticker,
+            next_check_date,
+            search_queries,
+        )
 
         return {
             "ticker": ticker,
             "screened_at": datetime.utcnow().isoformat() + "Z",
+            "next_check_date": next_check_date,
             "search_queries": search_queries,
             "ready_to_buy": result.get("ready_to_buy", False),
             "critical_conditions": result.get("critical_conditions", []),

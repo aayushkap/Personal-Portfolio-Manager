@@ -172,6 +172,21 @@ class StockAnalysisScraper:
 
         return context
 
+    async def _is_etf(self, page: Page) -> bool:
+        """
+        Detects ETFs by checking if the page <h1> contains 'ETF'.
+        e.g. 'Vanguard S&P 500 UCITS ETF (LON:VUAA)'
+        This is more reliable than URL or sidebar checks.
+        """
+        try:
+            h1 = await page.query_selector("h1")
+            if h1:
+                text = (await h1.inner_text()).upper()
+                return "ETF" in text
+        except Exception:
+            pass
+        return False
+
     # Page‑specific scraping methods
     @retriable(retries=2, delay=30.0)
     async def _scrape_overview(
@@ -243,13 +258,25 @@ class StockAnalysisScraper:
     async def _scrape_financials(
         self, page: Page, exchange: str, symbol: str
     ) -> Dict[str, Any]:
-        """Scrape the financials table (income statement / balance sheet)."""
+        """Scrape the financials table. Returns empty result for ETFs."""
         url = f"{self._get_base_url(exchange, symbol)}/financials/"
 
         logger.info(f"Scraping financials for ticker: \t {exchange}:{symbol}")
 
         await self._safe_goto(page, url)
         await self._human_mouse_wander(page)
+
+        # ETFs don't publish income statements — skip immediately
+        if await self._is_etf(page):
+            logger.info("%s:%s is an ETF — skipping financials", exchange, symbol)
+            return {
+                "symbol": symbol,
+                "exchange": exchange.upper(),
+                "skipped": True,
+                "reason": "etf",
+                "headers": [],
+                "rows": [],
+            }
 
         try:
             await page.wait_for_selector("#main-table", timeout=20000)
@@ -439,13 +466,26 @@ class StockAnalysisScraper:
     async def _scrape_ratios(
         self, page: Page, exchange: str, symbol: str
     ) -> Dict[str, Any]:
-        """Scrape the financial ratios page (historical time series)."""
+        """Scrape financial ratios. Returns empty result for ETFs."""
         url = f"{self._get_base_url(exchange, symbol)}/financials/ratios/"
 
         logger.info(f"Scraping ratios for ticker: \t {exchange}:{symbol}")
 
         await self._safe_goto(page, url)
         await self._human_mouse_wander(page)
+
+        # ETFs don't have ratio time series — skip immediately
+        if await self._is_etf(page):
+            logger.info("%s:%s is an ETF — skipping ratios", exchange, symbol)
+            return {
+                "symbol": symbol,
+                "exchange": exchange.upper(),
+                "skipped": True,
+                "reason": "etf",
+                "headers": [],
+                "rows": [],
+                "return_metrics_rows": [],
+            }
 
         try:
             await page.wait_for_selector("#main-table", timeout=20000)
@@ -477,7 +517,6 @@ class StockAnalysisScraper:
         except Exception as exc:
             rows = [{"error": str(exc)}]
 
-        # Filter rows containing return metrics
         return_rows = [
             r
             for r in rows

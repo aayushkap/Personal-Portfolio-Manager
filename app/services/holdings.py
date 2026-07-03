@@ -9,7 +9,8 @@ import pandas as pd
 
 from app.core.logger import get_logger
 from app.services.base import BaseModule
-from app.services.filters import PortfolioFilters
+from app.services.filters import DateRange, PortfolioFilters
+from app.services.overlays import OverlayResolver, OVERLAY_CATALOGUE
 from app.utils.fin import safe_float as _safe
 
 
@@ -87,15 +88,18 @@ class HoldingsModule(BaseModule):
         self,
         ticker: str,
         timeframe: str = "1m",
+        overlays: Optional[list[str]] = None,
         filters: Optional[PortfolioFilters] = None,
     ) -> dict:
         p = self.hql.portfolio()
         today = date.today()
         info = self.hql.ticker(ticker).info()
+        overlay_map = self._build_overlays(ticker, timeframe, today, overlays or [])
 
         return {
             "ticker": ticker,
             "chart": self._build_chart(ticker, timeframe, today),
+            "overlays": overlay_map,
             "transactions": self._build_transactions(ticker, today, p),
             "fundamentals": self._build_fundamentals(ticker),
             "last_updated": info.get("last_updated"),
@@ -201,6 +205,97 @@ class HoldingsModule(BaseModule):
             }
             for ts, row in ohlcv.iterrows()
         ]
+
+    def _build_overlays(
+        self,
+        ticker: str,
+        timeframe: str,
+        today: date,
+        overlays: list[str],
+    ) -> dict[str, list[dict]]:
+        if not overlays:
+            return {}
+
+        config = HoldingsModule._timeframe_config(timeframe)
+        start = (
+            (today - timedelta(days=config["days_back"]))
+            if config["days_back"]
+            else date(2000, 1, 1)
+        )
+        end = today
+        range_filters = PortfolioFilters(date_range=DateRange(start=start, end=end))
+
+        resolver = OverlayResolver(self)
+        result: dict[str, list[dict]] = {}
+
+        for key in overlays:
+            normalized = key.upper()
+            if normalized in OVERLAY_CATALOGUE:
+                series = resolver.resolve(normalized, range_filters)
+                result[normalized] = HoldingsModule._series_to_records(
+                    series, config["granularity"]
+                )
+                continue
+
+            series = HoldingsModule._overlay_ticker_series(
+                self, normalized, start, end, config["granularity"]
+            )
+            if not series.empty:
+                result[normalized] = HoldingsModule._series_to_records(
+                    series, config["granularity"]
+                )
+
+        return result
+
+    @staticmethod
+    def _timeframe_config(timeframe: str) -> dict:
+        mapping = {
+            "1d": {"granularity": "15min", "days_back": 1},
+            "1w": {"granularity": "30min", "days_back": 7},
+            "1m": {"granularity": "60min", "days_back": 30},
+            "3m": {"granularity": "1D", "days_back": 90},
+            "6m": {"granularity": "1D", "days_back": 180},
+            "1y": {"granularity": "1D", "days_back": 365},
+            "5y": {"granularity": "1D", "days_back": 365 * 5},
+            "all": {"granularity": "1D", "days_back": None},
+        }
+        return mapping.get(timeframe, mapping["1m"])
+
+    @staticmethod
+    def _series_to_records(series: pd.Series, granularity: str) -> list[dict]:
+        if series.empty:
+            return []
+        if series.index.tz is not None:
+            series.index = series.index.tz_localize(None)
+        if granularity == "1D":
+            series.index = series.index.normalize()
+        series = series.sort_index()
+        return [
+            {
+                "date": ts.strftime(
+                    "%Y-%m-%dT%H:%M" if granularity != "1D" else "%Y-%m-%d"
+                ),
+                "value": _safe(round(float(val), 4)) if pd.notna(val) else None,
+            }
+            for ts, val in series.items()
+        ]
+
+    def _overlay_ticker_series(
+        self, ticker: str, start: date, end: date, granularity: str
+    ) -> pd.Series:
+        t = self.hql.ticker(ticker)
+        df = t.prices(start=start, end=end, granularity=granularity)
+        if df is None or (hasattr(df, "empty") and df.empty):
+            return pd.Series(dtype=float, name=ticker)
+        if isinstance(df, pd.DataFrame):
+            if "close" not in df.columns:
+                return pd.Series(dtype=float, name=ticker)
+            s = df["close"].rename(ticker)
+        else:
+            s = df.rename(ticker)
+        if s.index.tz is not None:
+            s.index = s.index.tz_localize(None)
+        return s
 
     def _build_transactions(
         self,

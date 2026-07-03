@@ -102,13 +102,17 @@ class WatchlistModule(BaseModule):
             "div_yield": div_yield,
         }
 
-    def get_watchlist_detail(self, ticker: str, timeframe: str = "1m") -> dict:
+    def get_watchlist_detail(
+        self, ticker: str, timeframe: str = "1m", overlays: Optional[list[str]] = None
+    ) -> dict:
         today = date.today()
         info = self.hql.ticker(ticker).info()
+        overlay_map = self._build_overlays(ticker, timeframe, today, overlays or [])
 
         detail = {
             "ticker": ticker,
             "chart": self._build_chart(ticker, timeframe, today),
+            "overlays": overlay_map,
             "fundamentals": self._build_fundamentals(ticker),
             "last_updated": info.get("last_updated"),
         }
@@ -168,3 +172,10 @@ class WatchlistModule(BaseModule):
         from app.services.holdings import HoldingsModule
 
         return HoldingsModule._build_fundamentals(self, ticker)
+
+    def _build_overlays(
+        self, ticker: str, timeframe: str, today: date, overlays: list[str]
+    ) -> dict[str, list[dict]]:
+        from app.services.holdings import HoldingsModule
+
+        return HoldingsModule._build_overlays(self, ticker, timeframe, today, overlays)

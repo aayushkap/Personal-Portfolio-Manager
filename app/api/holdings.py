@@ -40,10 +40,12 @@ def list_holdings(
 def get_holding_detail(
     ticker: str,
     timeframe: str = Query("1m", pattern="^(1d|1w|1m|3m|6m|1y|5y|all)$"),
+    overlays: list[str] = Query(default_factory=list),
     module: HoldingsModule = Depends(get_holdings_module),
 ):
     result = module.get_holding_detail(
         ticker=ticker.upper(),
         timeframe=timeframe,
+        overlays=overlays,
     )
     return sanitize_for_json(result)

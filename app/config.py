@@ -28,6 +28,12 @@ BENCHMARKS: dict[str, dict] = {
         "symbol": "FADGI",
         "type": "index",
     },
+    "TVC:SPX": {
+        "label": "S&P 500",
+        "exchange": "TVC",
+        "symbol": "SPX",
+        "type": "index",
+    },
     "DFM:DFMREI": {
         "label": "DFM Real Estate Index",
         "exchange": "DFM",
@@ -46,31 +52,31 @@ BENCHMARKS: dict[str, dict] = {
         "symbol": "US10Y",
         "type": "index",
     },
-    "AMEX/NYSEARCA:XLE": {
+    "AMEX:XLE": {
         "label": "Energy Select Sector SPDR Fund",
         "exchange": "AMEX",
         "symbol": "XLE",
         "type": "etf",
     },
-    "AMEX/NYSEARCA:XLF": {
+    "AMEX:XLF": {
         "label": "Financial Select Sector SPDR Fund",
         "exchange": "AMEX",
         "symbol": "XLF",
         "type": "etf",
     },
-    "AMEX/NYSEARCA:XLK": {
+    "AMEX:XLK": {
         "label": "Technology Select Sector SPDR Fund",
         "exchange": "AMEX",
         "symbol": "XLK",
         "type": "etf",
     },
-    "AMEX/NYSEARCA:XLRE": {
+    "AMEX:XLRE": {
         "label": "Real Estate Select Sector SPDR Fund",
         "exchange": "AMEX",
         "symbol": "XLRE",
         "type": "etf",
     },
-    "AMEX/NYSEARCA:XLU": {
+    "AMEX:XLU": {
         "label": "Utilities Select Sector SPDR Fund",
         "exchange": "AMEX",
         "symbol": "XLU",

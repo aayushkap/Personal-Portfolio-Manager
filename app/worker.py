@@ -138,7 +138,7 @@ async def watchlist_screening_job():
 # Heavy jobs — orchestrated exclusively by job_runner, never by cron
 
 
-async def ohlc_job(bars: int = 100):
+async def ohlc_job(bars: int = 50):
     async with _job_lock:
         logger.info("OHLC job starting | now=%s", dubai_now().isoformat())
         try:
@@ -277,7 +277,7 @@ async def fundamentals_drip_job() -> str:
                             "symbol": info["sa_symbol"],
                         }
                     ),
-                    timeout=240,
+                    timeout=480,
                 )
                 scrape["purchase_details"] = purchases_map[target_key]
                 cache.save(target_key, scrape)

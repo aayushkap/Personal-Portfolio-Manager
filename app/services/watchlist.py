@@ -104,11 +104,13 @@ class WatchlistModule(BaseModule):
 
     def get_watchlist_detail(self, ticker: str, timeframe: str = "1m") -> dict:
         today = date.today()
+        info = self.hql.ticker(ticker).info()
 
         detail = {
             "ticker": ticker,
             "chart": self._build_chart(ticker, timeframe, today),
             "fundamentals": self._build_fundamentals(ticker),
+            "last_updated": info.get("last_updated"),
         }
 
         # merge_alerts expects a list of dicts with a "ticker" key.

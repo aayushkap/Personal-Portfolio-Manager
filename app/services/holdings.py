@@ -91,12 +91,14 @@ class HoldingsModule(BaseModule):
     ) -> dict:
         p = self.hql.portfolio()
         today = date.today()
+        info = self.hql.ticker(ticker).info()
 
         return {
             "ticker": ticker,
             "chart": self._build_chart(ticker, timeframe, today),
             "transactions": self._build_transactions(ticker, today, p),
             "fundamentals": self._build_fundamentals(ticker),
+            "last_updated": info.get("last_updated"),
         }
 
     # Card builder

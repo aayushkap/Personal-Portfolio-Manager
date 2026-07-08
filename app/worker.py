@@ -17,6 +17,7 @@ from app.services.quote import QuoteStore
 from app.services.watchlist import WatchlistModule
 from app.services.watchlist_ai import WatchlistAIScreener
 from app.data.db import DB
+from app.services.holdings_news import HoldingsNewsAgent
 
 from datetime import date
 
@@ -336,6 +337,10 @@ async def fundamentals_drip_job() -> str:
             return "failed"
 
 
+def run_holdings_news_check():
+    HoldingsNewsAgent().run()
+
+
 # Job Runner — single continuous loop, the ONLY place OHLC + drip are called
 
 
@@ -438,6 +443,7 @@ async def main():
         max_instances=1,
         misfire_grace_time=300,
     )
+    scheduler.add_job(run_holdings_news_check, "cron", hour=12, minute=0)
 
     scheduler.start()
 
@@ -451,6 +457,7 @@ async def main():
     # await fx_job()
     # await quote_job()
     # await watchlist_screening_job()
+    # run_holdings_news_check()
 
     try:
         while True:

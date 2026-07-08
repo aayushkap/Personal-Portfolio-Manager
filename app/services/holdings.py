@@ -12,6 +12,7 @@ from app.services.base import BaseModule
 from app.services.filters import DateRange, PortfolioFilters
 from app.services.overlays import OverlayResolver, OVERLAY_CATALOGUE
 from app.utils.fin import safe_float as _safe
+from app.services.holdings_news import HoldingsNewsAgent
 
 
 from app.utils.parsers import (
@@ -82,7 +83,10 @@ class HoldingsModule(BaseModule):
             if card:
                 results.append(card)
 
-        return sorted(results, key=lambda x: x["total_value"] or 0, reverse=True)
+        results = sorted(results, key=lambda x: x["total_value"] or 0, reverse=True)
+        results = HoldingsNewsAgent().merge_news(results)
+
+        return results
 
     def get_holding_detail(
         self,
@@ -103,6 +107,7 @@ class HoldingsModule(BaseModule):
             "transactions": self._build_transactions(ticker, today, p),
             "fundamentals": self._build_fundamentals(ticker),
             "last_updated": info.get("last_updated"),
+            "news": HoldingsNewsAgent().merge_news([{"ticker": ticker}]),
         }
 
     # Card builder

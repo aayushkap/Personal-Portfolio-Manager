@@ -39,6 +39,15 @@ def _series_ts_to_dubai(s: pd.Series) -> pd.Series:
     return s.dt.tz_convert(DUBAI_TZ).dt.normalize()
 
 
+def _to_dubai_ts(value) -> pd.Timestamp:
+    """Normalize any scalar date/datetime/Timestamp (naive or tz-aware,
+    any timezone) into a tz-aware Asia/Dubai Timestamp."""
+    ts = pd.Timestamp(value)
+    if ts.tzinfo is None:
+        return ts.tz_localize(DUBAI_TZ)
+    return ts.tz_convert(DUBAI_TZ)
+
+
 class OverlayResolver:
     def __init__(self, base: BaseModule) -> None:
         self._base = base
@@ -144,7 +153,20 @@ class OverlayResolver:
             return pd.DataFrame()
 
         prices = pd.concat(frames, axis=1)
-        prices.index = _idx_to_dubai(prices.index)
+        prices.index = _idx_to_dubai(prices.index).normalize()
+        prices = prices.sort_index()
+        prices = prices.groupby(level=0).last()
+        last_real_date = prices.dropna(how="all").index.max()
+        if pd.isna(last_real_date):
+            return pd.DataFrame()
+
+        calendar = pd.date_range(
+            start=prices.index.min(),
+            end=min(_to_dubai_ts(end).normalize(), last_real_date),
+            freq="D",
+        )
+
+        prices = prices.reindex(calendar).ffill().dropna(how="all")
         return prices
 
     # Overlay implementations
@@ -166,10 +188,9 @@ class OverlayResolver:
                 s.index = _idx_to_dubai(s.index)
 
                 calendar = pd.date_range(
-                    start=filters.date_range.start,
-                    end=filters.date_range.end,
+                    start=_to_dubai_ts(filters.date_range.start),
+                    end=_to_dubai_ts(filters.date_range.end),
                     freq="D",
-                    tz=DUBAI_TZ,
                 )
                 s = s.reindex(calendar).ffill()
                 return s
@@ -195,19 +216,19 @@ class OverlayResolver:
     def _twr(self, filters: PortfolioFilters) -> pd.Series:
         tx = self._transactions(filters)
         if tx.empty:
+            logger.warning("TWR: no transactions found for given filters")
             return pd.Series(dtype=float, name="TWR")
 
-        # Compute from first transaction for correct TWR chain
         first_tx_date = tx["date_parsed"].min()
         tickers = tx["ticker"].unique().tolist()
 
         prices = self._price_matrix(tickers, first_tx_date, filters.date_range.end)
         if prices.empty:
+            logger.warning("TWR: price matrix empty for tickers=%s", tickers)
             return pd.Series(dtype=float, name="TWR")
 
         trading_days = prices.index
 
-        # Point-in-time share counts using HQL transactions schema
         tx_copy = tx.copy()
         sign = tx_copy["transaction"].str.lower().map({"buy": 1, "sell": -1}).fillna(0)
         tx_copy["net_shares"] = tx_copy["shares"].fillna(0) * sign
@@ -215,47 +236,86 @@ class OverlayResolver:
             pd.to_datetime(tx_copy["date"], errors="coerce")
         )
 
+        # Snap each transaction to the NEXT available trading day instead of
+        # dropping it on reindex. This fixes weekend/holiday transactions
+        # silently vanishing from the share count.
+        tx_copy["ts_snapped"] = tx_copy["ts"].apply(
+            lambda t: (
+                trading_days[trading_days >= t].min()
+                if (trading_days >= t).any()
+                else trading_days.max()
+            )
+        )
+
         daily_changes = (
-            tx_copy.groupby(["ts", "ticker"])["net_shares"].sum().unstack(fill_value=0)
+            tx_copy.groupby(["ts_snapped", "ticker"])["net_shares"]
+            .sum()
+            .unstack(fill_value=0)
         )
         daily_shares = daily_changes.reindex(trading_days, fill_value=0).cumsum()
 
         common = daily_shares.columns.intersection(prices.columns)
-        portfolio_mv = (daily_shares[common] * prices[common]).sum(axis=1)
+        if common.empty:
+            logger.error(
+                "TWR: no overlap between transaction tickers %s and price tickers %s",
+                list(daily_shares.columns),
+                list(prices.columns),
+            )
+            return pd.Series(dtype=float, name="TWR")
 
-        # Cash flows: buys are positive (cash out), sells negative (cash back)
+        portfolio_mv = (daily_shares[common] * prices[common]).sum(axis=1, min_count=1)
+        portfolio_mv = portfolio_mv.fillna(0.0)
+
+        if (portfolio_mv == 0).all():
+            logger.error(
+                "TWR: portfolio_mv is all zeros — check ticker key format mismatch"
+            )
+            return pd.Series(dtype=float, name="TWR")
+
         tx_copy["flow"] = tx_copy["total_cost_aed"].fillna(0) * sign
         cash_flows = (
-            tx_copy.groupby("ts")["flow"].sum().reindex(trading_days, fill_value=0.0)
+            tx_copy.groupby("ts_snapped")["flow"]
+            .sum()
+            .reindex(trading_days, fill_value=0.0)
         )
 
-        # TWR chain
         twr_factors = pd.Series(1.0, index=trading_days)
         prev_value = portfolio_mv.iloc[0]
 
         for i in range(1, len(trading_days)):
-            cf = cash_flows.iloc[i]
             end_val = portfolio_mv.iloc[i]
-            base = prev_value + cf
-            twr_factors.iloc[i] = end_val / base if base != 0 else 1.0
+            cf = cash_flows.iloc[i]
+
+            if prev_value > 0:
+                twr_factors.iloc[i] = (end_val - cf) / prev_value
+            elif end_val > 0 and cf > 0:
+                # First funded day: adding capital starts the track record,
+                # it is not itself performance.
+                twr_factors.iloc[i] = 1.0
+            else:
+                twr_factors.iloc[i] = 1.0
+
             prev_value = end_val
 
-        twr_cumulative = (twr_factors.cumprod() - 1) * 100
+        wealth_index = twr_factors.cumprod()
 
-        # Slice and rebase to window start
-        window_start = pd.Timestamp(filters.date_range.start, tz="Asia/Dubai")
-        window_end = pd.Timestamp(filters.date_range.end, tz="Asia/Dubai")
+        window_start = _to_dubai_ts(filters.date_range.start)
+        window_end = _to_dubai_ts(filters.date_range.end)
         window_mask = trading_days >= window_start
-        twr_window = twr_cumulative[window_mask]
-        twr_window = twr_window - twr_window.iloc[0]
+
+        if not window_mask.any():
+            logger.warning(
+                "TWR: window_start=%s is after last trading day=%s",
+                window_start,
+                trading_days.max(),
+            )
+            return pd.Series(dtype=float, name="TWR")
 
         window_start_val = portfolio_mv[window_mask].iloc[0]
-        twr_aed = window_start_val * (1 + twr_window / 100)
+        twr_window = wealth_index[window_mask] / wealth_index[window_mask].iloc[0]
+        twr_aed = window_start_val * twr_window
 
-        # Expand to every calendar day and forward-fill over weekends/holidays
-        calendar_days = pd.date_range(
-            twr_aed.index[0], window_end, freq="D", tz="Asia/Dubai"
-        )
+        calendar_days = pd.date_range(start=twr_aed.index[0], end=window_end, freq="D")
         twr_aed = twr_aed.reindex(calendar_days).ffill()
 
         return twr_aed.rename("TWR")
@@ -325,10 +385,9 @@ class OverlayResolver:
             return pd.Series(dtype=float, name=name)
 
         calendar_days = pd.date_range(
-            start=filters.date_range.start,
-            end=filters.date_range.end,
+            start=_to_dubai_ts(filters.date_range.start),
+            end=_to_dubai_ts(filters.date_range.end),
             freq="D",
-            tz=DUBAI_TZ,
         )
 
         daily_rate = annual_rate / 365.0

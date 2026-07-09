@@ -19,7 +19,7 @@ NEWS_PATH = CACHE_DIR / "holdings_news.json"
 
 MIN_CHECK_INTERVAL_DAYS = 1
 MAX_CHECK_INTERVAL_DAYS = 7  # hard weekly ceiling
-NEW_DEVELOPMENT_WINDOW_DAYS = 2
+NEW_DEVELOPMENT_WINDOW_DAYS = 1
 BOOTSTRAP_LOOKBACK_DAYS = 14  # first-ever run window when no news exists yet
 
 _NEWS_PROMPT = """\

@@ -13,6 +13,7 @@ FX_PAIRS = [
     {"tv_exchange": "FX_IDC", "symbol": "GBPAED"},
     {"tv_exchange": "FX_IDC", "symbol": "USDAED"},
     {"tv_exchange": "FX_IDC", "symbol": "EURAED"},
+    {"tv_exchange": "FX_IDC", "symbol": "CADAED"},
 ]
 
 

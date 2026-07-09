@@ -443,7 +443,15 @@ async def main():
         max_instances=1,
         misfire_grace_time=300,
     )
-    scheduler.add_job(run_holdings_news_check, "cron", hour=12, minute=0)
+    scheduler.add_job(
+        run_holdings_news_check,
+        "cron",
+        hour=12,
+        minute=0,
+        id="holdings_news",
+        max_instances=1,
+        misfire_grace_time=300,
+    )
 
     scheduler.start()
 

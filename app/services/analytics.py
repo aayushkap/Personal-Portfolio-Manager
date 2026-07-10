@@ -166,6 +166,8 @@ class AnalyticsModule(BaseModule):
         if tx_df.empty:
             return self._empty_income()
 
+        holdings_df = p.holdings()
+
         today = date.today()
         year_start = date(today.year, 1, 1)
         q_start, q_end = _quarter_bounds(today)
@@ -197,8 +199,6 @@ class AnalyticsModule(BaseModule):
             if ref_date is None:
                 continue
 
-            # Reclassify status to match original schema
-            # (HQL gives 'received'/'pending' — expand pending to entitled/soon/upcoming)
             if status == "received":
                 event_status = "received"
             elif ex_date and ex_date <= today:
@@ -234,31 +234,70 @@ class AnalyticsModule(BaseModule):
             if ref_date and q_start <= ref_date <= q_end:
                 q_total += amount
 
+        # All-time metrics: unbounded on both sides, no capital-pool
+        # mismatch. Deliberately includes exited positions' dividends and
+        # their original cost — this is a lifetime income-efficiency figure,
+        # not a "current yield" figure, so mixing exited + held is correct here.
         total_cost_aed = tx_df[tx_df["transaction"].str.lower() == "buy"][
             "total_cost_aed"
         ].sum()
+
+        eligible_tickers = set(
+            divs_df["ticker"].dropna().astype(str).str.lower().unique()
+        )
+
+        eligible_buy_mask = tx_df["transaction"].fillna("").str.lower().eq(
+            "buy"
+        ) & tx_df["ticker"].fillna("").str.lower().isin(eligible_tickers)
+
+        total_cost_eligible_aed = tx_df.loc[eligible_buy_mask, "total_cost_aed"].sum()
+
         total_received = sum(e["amount"] for e in events if e["status"] == "received")
+
         yoc_alltime = (
             round(total_received / total_cost_aed * 100, 2) if total_cost_aed else 0.0
         )
+        yoc_eligible_alltime = (
+            round(total_received / total_cost_eligible_aed * 100, 2)
+            if total_cost_eligible_aed
+            else 0.0
+        )
 
-        trailing_divs = sum(
+        # Trailing 12m metrics: held positions ONLY, on both sides.
+        # A sold position's cost basis no longer exists in the book, so it
+        # cannot appear in a "current yield" denominator — and its dividends
+        # are excluded from this ratio's numerator to match.
+        if "shares" in holdings_df.columns and "cost_basis_aed" in holdings_df.columns:
+            held_df = holdings_df.loc[
+                holdings_df["shares"] > 0, ["ticker", "cost_basis_aed"]
+            ]
+        else:
+            held_df = pd.DataFrame(columns=["ticker", "cost_basis_aed"])
+
+        held_tickers = set(held_df["ticker"])
+        cost_basis_held = held_df["cost_basis_aed"].sum()
+
+        cost_basis_held_eligible = held_df.loc[
+            held_df["ticker"].str.lower().isin(eligible_tickers), "cost_basis_aed"
+        ].sum()
+
+        trailing_divs_held = sum(
             e["amount"]
             for e in events
             if e["status"] == "received"
+            and e["ticker"] in held_tickers
             and e["pay_date"]
             and one_year_ago <= pd.to_datetime(e["pay_date"]).date() <= today
         )
 
-        invested_last_12m = tx_df[
-            (tx_df["transaction"].str.lower() == "buy")
-            & (pd.to_datetime(tx_df["date"], errors="coerce").dt.date >= one_year_ago)
-            & (pd.to_datetime(tx_df["date"], errors="coerce").dt.date <= today)
-        ]["total_cost_aed"].sum()
-
         yoc_trailing_12m = (
-            round(trailing_divs / invested_last_12m * 100, 2)
-            if invested_last_12m
+            round(trailing_divs_held / cost_basis_held * 100, 2)
+            if cost_basis_held
+            else 0.0
+        )
+        yoc_eligible_trailing_12m = (
+            round(trailing_divs_held / cost_basis_held_eligible * 100, 2)
+            if cost_basis_held_eligible
             else 0.0
         )
 
@@ -270,6 +309,8 @@ class AnalyticsModule(BaseModule):
                 "ytd_received": round(ytd_total, 2),
                 "yoc_alltime_pct": yoc_alltime,
                 "yoc_trailing_12m_pct": yoc_trailing_12m,
+                "yoc_eligible_alltime_pct": yoc_eligible_alltime,
+                "yoc_eligible_12m_pct": yoc_eligible_trailing_12m,
                 "current_quarter": _quarter_label(today),
                 "quarter_projected": round(q_total, 2),
             },

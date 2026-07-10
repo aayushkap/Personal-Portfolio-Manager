@@ -26,7 +26,6 @@ async def fetch_and_save_fx() -> dict[str, float]:
         try:
             await _set_ohlc(
                 tv_exchange=pair["tv_exchange"],
-                sa_exchange="",
                 symbol=pair["symbol"],
                 bars=5,
             )

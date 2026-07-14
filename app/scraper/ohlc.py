@@ -66,7 +66,7 @@ async def _set_ohlc(
                     ]
                 )
 
-                logger.info("%s — upserted %d bars", storage_key, len(df))
+                # logger.info("%s — upserted %d bars", storage_key, len(df))
                 return
 
             if attempt == max_retries:

@@ -83,6 +83,12 @@ class WatchlistModule(BaseModule):
         next_div_date, div_yield = self._next_dividend(ticker)
         meta = self._ticker_meta(ticker)
 
+        tags = (
+            [i.strip() for i in item.get("tags", "").split("+")]
+            if item.get("tags") is not None
+            else []
+        )
+
         return {
             "ticker": ticker,
             "name": item.get("name") or meta.get("name") or ticker,
@@ -91,6 +97,7 @@ class WatchlistModule(BaseModule):
             "logo_url": meta.get("logo_url"),
             "notes": item.get("notes"),
             "criteria": item.get("criteria"),  # passes through for UI
+            "tags": tags,
             "current_price": _safe(current_price),
             "dod_pct": _safe(_pct(current_price, p1d)),
             "wow_pct": _safe(_pct(current_price, p1w)),

@@ -72,6 +72,7 @@ class GSheet_Manager:
                     **_ticker_fields(t),
                     "notes": str(row.get("Notes", "")).strip() or None,
                     "criteria": str(row.get("Criteria", "")).strip() or None,
+                    "tags": str(row.get("Tags", "")).strip() or None,
                 }
             )
 

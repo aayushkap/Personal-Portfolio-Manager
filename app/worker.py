@@ -392,7 +392,7 @@ async def job_runner():
                     sleep_for = 15 * 60
                 else:
                     # idle: nothing due this week, so chill
-                    sleep_for = 60 * 60 if weekday >= 5 else 30 * 60
+                    sleep_for = 120 * 60 if weekday >= 5 else 60 * 60
 
                 logger.info(
                     "Job runner: off-hours | drip_status=%s | sleep=%.0fs",

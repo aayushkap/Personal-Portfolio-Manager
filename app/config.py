@@ -82,4 +82,10 @@ BENCHMARKS: dict[str, dict] = {
         "symbol": "XLU",
         "type": "etf",
     },
+    "FTSE-UKX": {
+        "label": "FTSE 100 Index",
+        "exchange": "FTSE",
+        "symbol": "UKX",
+        "type": "index",
+    },
 }

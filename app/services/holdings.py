@@ -357,6 +357,8 @@ class HoldingsModule(BaseModule):
 
         ov = t.overview()
         if ov:
+            if ov.get("about"):
+                result["about"] = ov["about"]
             result["snapshot"] = {
                 k: v
                 for k, v in {

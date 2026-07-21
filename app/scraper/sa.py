@@ -216,6 +216,24 @@ class StockAnalysisScraper:
         if change_el:
             data["price_change"] = (await change_el.inner_text()).strip()
 
+        # Company summary in the "About <symbol>" section on the overview page.
+        # Remove the nested "[Read more]" link so only the summary is stored.
+        try:
+            about = await page.evaluate("""() => {
+                    const heading = [...document.querySelectorAll('h2')].find(
+                        (element) => /^About\\s+/i.test(element.textContent.trim())
+                    );
+                    const paragraph = heading?.parentElement?.querySelector('p');
+                    if (!paragraph) return null;
+                    const copy = paragraph.cloneNode(true);
+                    copy.querySelectorAll('a').forEach((link) => link.remove());
+                    return copy.textContent.replace(/\\s+/g, ' ').trim() || null;
+                }""")
+            if about:
+                data["about"] = about
+        except Exception:
+            pass
+
         # Summary stats table
         stats = {}
         try:

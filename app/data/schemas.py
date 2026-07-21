@@ -50,6 +50,7 @@ class OverviewStats(BaseModel):
 class OverviewData(ScrapedSection):
     price: Optional[str] = None
     price_change: Optional[str] = None
+    about: Optional[str] = None
     stats: OverviewStats = Field(default_factory=OverviewStats)
 
     @field_validator("stats", mode="before")

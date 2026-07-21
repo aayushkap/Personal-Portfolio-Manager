@@ -165,6 +165,7 @@ class TickerQuery:
         }
         """
         raw = self.raw()
+        overview = raw.get("overview") or {}
         stats = _overview_stats(raw)
         currency = self.cache_repo.resolve_currency(raw)
 
@@ -196,6 +197,7 @@ class TickerQuery:
                 dividend_yield = parse_any_stat(inside)
 
         return {
+            "about": overview.get("about"),
             "market_cap": market_cap["value"],
             "market_cap_change": market_cap["change"],
             "revenue_ttm": revenue["value"],

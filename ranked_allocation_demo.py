@@ -242,7 +242,6 @@ def parse_args() -> tuple[Config, set[str] | None]:
         "--allow-negative",
         action="store_true",
         default=False,
-        
         help="Allow assets with negative momentum to be allocated.",
     )
     parser.add_argument(

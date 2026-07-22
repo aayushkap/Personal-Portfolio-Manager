@@ -112,7 +112,13 @@ class WatchlistModule(BaseModule):
     def get_watchlist_detail(
         self, ticker: str, timeframe: str = "1m", overlays: Optional[list[str]] = None
     ) -> dict:
+        # A ticker can remain in the watchlist after its position is closed.
+        # Keep exposing its complete ledger in that case, using the same
+        # formatter as the holdings detail endpoint.
+        from app.services.holdings import HoldingsModule
+
         today = date.today()
+        portfolio = self.hql.portfolio()
         info = self.hql.ticker(ticker).info()
         overlay_map = self._build_overlays(ticker, timeframe, today, overlays or [])
 
@@ -120,6 +126,9 @@ class WatchlistModule(BaseModule):
             "ticker": ticker,
             "chart": self._build_chart(ticker, timeframe, today),
             "overlays": overlay_map,
+            "transactions": HoldingsModule._build_transactions(
+                self, ticker, today, portfolio
+            ),
             "fundamentals": self._build_fundamentals(ticker),
             "last_updated": info.get("last_updated"),
         }

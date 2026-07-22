@@ -1,7 +1,6 @@
 import asyncio
 
 from ..data.db import DB
-from ..scraper.ohlc import OHLC
 
 MIN_ROWS = 5_000
 

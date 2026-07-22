@@ -21,6 +21,10 @@ def _pct(new: Optional[float], old: Optional[float]) -> Optional[float]:
     return round((new - old) / old * 100, 2)
 
 
+def _earnings_nearby(earnings_date, today: date) -> bool:
+    return earnings_date is not None and abs((earnings_date - today).days) <= 2
+
+
 class WatchlistModule(BaseModule):
     def get_watchlist(self, items: list[dict]) -> list[dict]:
         if not items:
@@ -35,6 +39,7 @@ class WatchlistModule(BaseModule):
         currency_map = {}
         for ticker in tickers:
             data = self.get_ticker(ticker)
+
             if data and data.purchase_details:
                 _, cur = parse_money(data.purchase_details[0].cost_per_share)
                 if cur:
@@ -82,6 +87,7 @@ class WatchlistModule(BaseModule):
 
         next_div_date, div_yield = self._next_dividend(ticker)
         meta = self._ticker_meta(ticker)
+        earnings_date = self.hql.ticker(ticker).overview().get("earnings_date")
 
         tags = (
             [i.strip() for i in item.get("tags", "").split("+")]
@@ -107,6 +113,7 @@ class WatchlistModule(BaseModule):
             "yoy_pct": _safe(_pct(current_price, p1y)),
             "next_div_date": next_div_date,
             "div_yield": div_yield,
+            "earnings_nearby": _earnings_nearby(earnings_date, today),
         }
 
     def get_watchlist_detail(

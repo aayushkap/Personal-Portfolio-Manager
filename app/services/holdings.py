@@ -24,6 +24,10 @@ logger = get_logger()
 pd.set_option("display.max_rows", None)
 
 
+def _earnings_nearby(earnings_date, today: date) -> bool:
+    return earnings_date is not None and abs((earnings_date - today).days) <= 2
+
+
 class HoldingsModule(BaseModule):
     def get_holdings_list(self, filters: PortfolioFilters) -> list[dict]:
         p = self.hql.portfolio()
@@ -145,6 +149,7 @@ class HoldingsModule(BaseModule):
 
         t = self.hql.ticker(ticker)
         info = t.info()
+        earnings_date = t.overview().get("earnings_date")
 
         return {
             "ticker": ticker,
@@ -163,6 +168,7 @@ class HoldingsModule(BaseModule):
             "three_month_pct": _safe(_pct(current_price, _price_ago(90))),
             "cumulative_divs": round(cum_divs, 2),
             "yoc_pct": _safe(yoc),
+            "earnings_nearby": _earnings_nearby(earnings_date, today),
             "sparkline": self._build_sparkline(ticker, prices, today),
         }
 

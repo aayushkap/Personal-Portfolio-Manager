@@ -426,7 +426,10 @@ class PortfolioQuery:
         avg_cost: dict[str, float] = {}  # ticker → current avg cost per share in AED
         running: dict[str, float] = {}  # ticker → current shares held
 
-        for _, row in tx.sort_values("date_clean").iterrows():
+        tx_ordered = tx.assign(_tx_lower=tx["transaction"].str.lower()).sort_values(
+            ["date_clean", "_tx_lower"], kind="stable", ascending=[True, True]
+        )
+        for _, row in tx_ordered.iterrows():
             ticker = row["ticker"]
             shares = row["shares"] if pd.notna(row["shares"]) else 0.0
             cost = row["total_cost_aed"] if pd.notna(row["total_cost_aed"]) else 0.0

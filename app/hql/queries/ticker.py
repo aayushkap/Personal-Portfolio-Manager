@@ -169,7 +169,12 @@ class TickerQuery:
         stats = _overview_stats(raw)
         currency = self.cache_repo.resolve_currency(raw)
 
-        market_cap = parse_mixed_stat(stats.get("Market Cap"))
+        # ETF overview pages use a small set of different labels. Normalize
+        # those inputs here while preserving the public overview() schema.
+        market_cap_raw = stats.get("Market Cap") or stats.get("Assets")
+        market_cap = parse_mixed_stat(
+            str(market_cap_raw).replace("$", "") if market_cap_raw else ""
+        )
         revenue = parse_mixed_stat(stats.get("Revenue (ttm)"))
         net_income = parse_mixed_stat(stats.get("Net Income"))
         eps = parse_mixed_stat(stats.get("EPS"))
@@ -180,12 +185,18 @@ class TickerQuery:
         )
         dlow, dhigh = parse_range(stats.get("Day's Range"))
         wlow, whigh = parse_range(stats.get("52-Week Range"))
+        if wlow is None:
+            wlow = parse_any_stat(stats.get("52-Week Low"))
+        if whigh is None:
+            whigh = parse_any_stat(stats.get("52-Week High"))
         dlow = self.fx.to_aed(dlow, currency)
         dhigh = self.fx.to_aed(dhigh, currency)
         wlow = self.fx.to_aed(wlow, currency)
         whigh = self.fx.to_aed(whigh, currency)
 
-        dividend_raw = str(stats.get("Dividend") or "").strip()
+        dividend_raw = str(
+            stats.get("Dividend") or stats.get("Dividend (ttm)") or ""
+        ).strip()
         dividend_per_share = None
         dividend_yield = None
         if dividend_raw:
@@ -195,6 +206,11 @@ class TickerQuery:
             if "(" in dividend_raw and ")" in dividend_raw:
                 inside = dividend_raw.split("(")[1].split(")")[0].strip()
                 dividend_yield = parse_any_stat(inside)
+
+        # ETF pages provide yield in a separate field rather than alongside
+        # the distribution amount.
+        if dividend_yield is None:
+            dividend_yield = parse_any_stat(stats.get("Dividend Yield"))
 
         return {
             "about": overview.get("about"),

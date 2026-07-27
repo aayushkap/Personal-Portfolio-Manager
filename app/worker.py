@@ -198,6 +198,10 @@ async def fundamentals_drip_job() -> str:
                 if key := item.get("ticker"):
                     if key not in all_info:
                         all_info[key] = item
+                    elif item.get("tags"):
+                        # A watchlist classification (for example, ETF) also
+                        # applies when the ticker appears in transactions.
+                        all_info[key]["tags"] = item["tags"]
 
             if not all_info:
                 logger.info("No tickers found in sheets — nothing to scrape.")
@@ -276,6 +280,7 @@ async def fundamentals_drip_job() -> str:
                         {
                             "exchange": info["sa_exchange"],
                             "symbol": info["sa_symbol"],
+                            "tags": info.get("tags"),
                         }
                     ),
                     timeout=480,

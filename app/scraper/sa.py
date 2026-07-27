@@ -115,12 +115,26 @@ class StockAnalysisScraper:
         except Exception:
             return None
 
-    def _get_base_url(self, exchange: str, symbol: str) -> str:
-        """Determine the correct base URL structure based on the exchange."""
+    def _get_base_url(self, exchange: str, symbol: str, is_etf: bool = False) -> str:
+        """Determine the Stock Analysis URL for a stock, ETF, or foreign quote."""
+        if is_etf:
+            return f"https://stockanalysis.com/etf/{symbol.lower()}"
+
         us_exchanges = {"NYSE", "NASDAQ", "AMEX", "OTC", "BATS"}
         if exchange.upper() in us_exchanges:
             return f"https://stockanalysis.com/stocks/{symbol.lower()}"
         return f"https://stockanalysis.com/quote/{exchange.lower()}/{symbol.lower()}"
+
+    @staticmethod
+    def _has_etf_tag(tags: Any) -> bool:
+        """Return whether ``tags`` contains ETF as a distinct, case-insensitive tag."""
+        if isinstance(tags, str):
+            values = tags.split("+")
+        elif isinstance(tags, (list, tuple, set)):
+            values = tags
+        else:
+            return False
+        return any(str(tag).strip().upper() == "ETF" for tag in values)
 
     async def _safe_goto(
         self, page: Page, url: str, wait_for: str = "domcontentloaded"
@@ -172,28 +186,13 @@ class StockAnalysisScraper:
 
         return context
 
-    async def _is_etf(self, page: Page) -> bool:
-        """
-        Detects ETFs by checking if the page <h1> contains 'ETF'.
-        e.g. 'Vanguard S&P 500 UCITS ETF (LON:VUAA)'
-        This is more reliable than URL or sidebar checks.
-        """
-        try:
-            h1 = await page.query_selector("h1")
-            if h1:
-                text = (await h1.inner_text()).upper()
-                return "ETF" in text
-        except Exception:
-            pass
-        return False
-
     # Page‑specific scraping methods
     @retriable(retries=2, delay=30.0)
     async def _scrape_overview(
-        self, page: Page, exchange: str, symbol: str
+        self, page: Page, exchange: str, symbol: str, is_etf: bool = False
     ) -> Dict[str, Any]:
         """Scrape the overview page (price, change, key stats)."""
-        url = f"{self._get_base_url(exchange, symbol)}/"
+        url = f"{self._get_base_url(exchange, symbol, is_etf)}/"
 
         logger.info(f"Scraping overview for ticker: \t {exchange}:{symbol}")
 
@@ -274,27 +273,15 @@ class StockAnalysisScraper:
 
     @retriable(retries=2, delay=30.0)
     async def _scrape_financials(
-        self, page: Page, exchange: str, symbol: str
+        self, page: Page, exchange: str, symbol: str, is_etf: bool = False
     ) -> Dict[str, Any]:
         """Scrape the financials table. Returns empty result for ETFs."""
-        url = f"{self._get_base_url(exchange, symbol)}/financials/"
+        url = f"{self._get_base_url(exchange, symbol, is_etf)}/financials/"
 
         logger.info(f"Scraping financials for ticker: \t {exchange}:{symbol}")
 
         await self._safe_goto(page, url)
         await self._human_mouse_wander(page)
-
-        # ETFs don't publish income statements — skip immediately
-        if await self._is_etf(page):
-            logger.info("%s:%s is an ETF — skipping financials", exchange, symbol)
-            return {
-                "symbol": symbol,
-                "exchange": exchange.upper(),
-                "skipped": True,
-                "reason": "etf",
-                "headers": [],
-                "rows": [],
-            }
 
         try:
             await page.wait_for_selector("#main-table", timeout=20000)
@@ -338,10 +325,10 @@ class StockAnalysisScraper:
         return result
 
     async def _scrape_dividends(
-        self, page: Page, exchange: str, symbol: str
+        self, page: Page, exchange: str, symbol: str, is_etf: bool = False
     ) -> Dict[str, Any]:
         """Scrape the dividend history table."""
-        url = f"{self._get_base_url(exchange, symbol)}/dividend/"
+        url = f"{self._get_base_url(exchange, symbol, is_etf)}/dividend/"
 
         logger.info(f"Scraping dividends for ticker: \t {exchange}:{symbol}")
 
@@ -395,10 +382,10 @@ class StockAnalysisScraper:
         return result
 
     async def _scrape_statistics(
-        self, page: Page, exchange: str, symbol: str
+        self, page: Page, exchange: str, symbol: str, is_etf: bool = False
     ) -> Dict[str, Any]:
         """Scrape the statistics page (detailed ratios and metrics)."""
-        url = f"{self._get_base_url(exchange, symbol)}/statistics/"
+        url = f"{self._get_base_url(exchange, symbol, is_etf)}/statistics/"
 
         logger.info(f"Scraping statistics for ticker: \t {exchange}:{symbol}")
 
@@ -482,28 +469,15 @@ class StockAnalysisScraper:
         return data
 
     async def _scrape_ratios(
-        self, page: Page, exchange: str, symbol: str
+        self, page: Page, exchange: str, symbol: str, is_etf: bool = False
     ) -> Dict[str, Any]:
         """Scrape financial ratios. Returns empty result for ETFs."""
-        url = f"{self._get_base_url(exchange, symbol)}/financials/ratios/"
+        url = f"{self._get_base_url(exchange, symbol, is_etf)}/financials/ratios/"
 
         logger.info(f"Scraping ratios for ticker: \t {exchange}:{symbol}")
 
         await self._safe_goto(page, url)
         await self._human_mouse_wander(page)
-
-        # ETFs don't have ratio time series — skip immediately
-        if await self._is_etf(page):
-            logger.info("%s:%s is an ETF — skipping ratios", exchange, symbol)
-            return {
-                "symbol": symbol,
-                "exchange": exchange.upper(),
-                "skipped": True,
-                "reason": "etf",
-                "headers": [],
-                "rows": [],
-                "return_metrics_rows": [],
-            }
 
         try:
             await page.wait_for_selector("#main-table", timeout=20000)
@@ -563,6 +537,7 @@ class StockAnalysisScraper:
         exchange = ticker["exchange"]
         symbol = ticker["symbol"]
         key = f"{exchange.upper()}:{symbol}"
+        is_etf = self._has_etf_tag(ticker.get("tags"))
 
         context = await self._create_context(browser)
         page = await context.new_page()
@@ -578,16 +553,34 @@ class StockAnalysisScraper:
             lambda route: route.abort(),
         )
 
-        result = {"ticker": key, "scraped_at": dubai_now_iso()}
+        result = {
+            "ticker": key,
+            "scraped_at": dubai_now_iso(),
+            "asset_type": "etf" if is_etf else "stock",
+        }
 
         #  Each section is independent — one failure never blocks the others
         sections = [
-            ("overview", lambda: self._scrape_overview(page, exchange, symbol)),
-            ("financials", lambda: self._scrape_financials(page, exchange, symbol)),
-            ("dividends", lambda: self._scrape_dividends(page, exchange, symbol)),
-            ("statistics", lambda: self._scrape_statistics(page, exchange, symbol)),
-            ("ratios", lambda: self._scrape_ratios(page, exchange, symbol)),
+            ("overview", lambda: self._scrape_overview(page, exchange, symbol, is_etf)),
+            (
+                "dividends",
+                lambda: self._scrape_dividends(page, exchange, symbol, is_etf),
+            ),
         ]
+        if not is_etf:
+            sections.extend(
+                [
+                    (
+                        "financials",
+                        lambda: self._scrape_financials(page, exchange, symbol),
+                    ),
+                    (
+                        "statistics",
+                        lambda: self._scrape_statistics(page, exchange, symbol),
+                    ),
+                    ("ratios", lambda: self._scrape_ratios(page, exchange, symbol)),
+                ]
+            )
 
         for section_name, scrape_fn in sections:
             try:
@@ -601,7 +594,7 @@ class StockAnalysisScraper:
         # Ticker is only fully failed if EVERY section errored
         all_failed = all(
             isinstance(result.get(s), dict) and "error" in result.get(s, {})
-            for s in ("overview", "financials", "dividends", "statistics", "ratios")
+            for s, _ in sections
         )
         if all_failed:
             result["error"] = "all sections failed"

@@ -8,6 +8,7 @@ from typing import Optional
 import pandas as pd
 
 from app.core.logger import get_logger
+from app.hql.errors import HQLTickerNotFound
 from app.services.base import BaseModule
 from app.utils.fin import parse_money, safe_float as _safe
 from app.services.watchlist_ai import WatchlistAIScreener
@@ -22,7 +23,11 @@ def _pct(new: Optional[float], old: Optional[float]) -> Optional[float]:
 
 
 def _earnings_nearby(earnings_date, today: date) -> bool:
-    return earnings_date is not None and abs((earnings_date - today).days) <= 2
+    if earnings_date is None:
+        return False
+
+    delta_days = (today - earnings_date).days
+    return -1 <= delta_days <= 2
 
 
 class WatchlistModule(BaseModule):
@@ -85,9 +90,20 @@ class WatchlistModule(BaseModule):
         p6m = _ago(180)
         p1y = _ago(365)
 
-        next_div_date, div_yield = self._next_dividend(ticker)
         meta = self._ticker_meta(ticker)
-        earnings_date = self.hql.ticker(ticker).overview().get("earnings_date")
+        # A watchlist can contain a ticker before it has been scraped into the
+        # HQL cache. Earnings are optional enrichment, so a cache miss must not
+        # prevent the rest of the watchlist from being returned.
+        overview = {}
+        try:
+            overview = self.hql.ticker(ticker).overview()
+        except HQLTickerNotFound:
+            logger.info(
+                "Skipping overview data for watchlist ticker absent from cache: %s",
+                ticker,
+            )
+        next_div_date, div_yield = self._next_dividend(ticker, overview)
+        earnings_date = overview.get("earnings_date")
 
         tags = (
             [i.strip() for i in item.get("tags", "").split("+")]
@@ -143,7 +159,9 @@ class WatchlistModule(BaseModule):
         # merge_alerts expects a list of dicts with a "ticker" key.
         return WatchlistAIScreener().merge_alerts([detail])[0]
 
-    def _next_dividend(self, ticker: str) -> tuple[Optional[str], Optional[str]]:
+    def _next_dividend(
+        self, ticker: str, overview: Optional[dict] = None
+    ) -> tuple[Optional[str], Optional[str]]:
         today = date.today()
 
         # 1. Get the yield from statistics first (always do this)
@@ -158,6 +176,13 @@ class WatchlistModule(BaseModule):
                     if raw and str(raw) not in ("", "-", "n/a")
                     else None
                 )
+
+        # ETFs do not have a statistics page, but their overview includes a
+        # normalized dividend yield through HQL.
+        if div_yield is None and overview:
+            overview_yield = overview.get("dividend_yield")
+            if overview_yield is not None:
+                div_yield = f"{overview_yield * 100:.2f}%"
 
         # 2. Check for an upcoming ex-date
         upcoming = [

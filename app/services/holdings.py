@@ -25,7 +25,11 @@ pd.set_option("display.max_rows", None)
 
 
 def _earnings_nearby(earnings_date, today: date) -> bool:
-    return earnings_date is not None and abs((earnings_date - today).days) <= 2
+    if earnings_date is None:
+        return False
+
+    delta_days = (today - earnings_date).days
+    return -1 <= delta_days <= 2
 
 
 class HoldingsModule(BaseModule):

@@ -43,9 +43,7 @@ def _point_in_time_yoc(
     tx = transactions.copy()
     tx["_ticker"] = tx["ticker"].fillna("").astype(str).str.lower()
     tx["_date"] = pd.to_datetime(tx["date"], errors="coerce").dt.date
-    tx["_sign"] = (
-        tx["transaction"].fillna("").str.lower().map({"buy": 1, "sell": -1})
-    )
+    tx["_sign"] = tx["transaction"].fillna("").str.lower().map({"buy": 1, "sell": -1})
     tx["_net_cost"] = tx["total_cost_aed"].fillna(0) * tx["_sign"].fillna(0)
 
     dividends = 0.0
@@ -55,9 +53,7 @@ def _point_in_time_yoc(
             continue
 
         pay_date = (
-            pd.to_datetime(event["pay_date"]).date()
-            if event["pay_date"]
-            else None
+            pd.to_datetime(event["pay_date"]).date() if event["pay_date"] else None
         )
         if pay_date_from and (not pay_date or pay_date < pay_date_from):
             continue

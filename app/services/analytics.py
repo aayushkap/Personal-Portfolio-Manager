@@ -7,11 +7,92 @@ from datetime import date, timedelta
 from typing import Literal
 
 import pandas as pd
+from scipy.optimize import brentq
 
+from app.config import BENCHMARKS
 from app.core.logger import get_logger
 from app.services.base import BaseModule
+from app.services.filters import PortfolioFilters
 
 logger = get_logger()
+
+
+# The cache uses TradingView-style exchange prefixes.  A benchmark is assigned
+# from the exchange rather than from a hard-coded list of portfolio tickers, so
+# newly added holdings participate automatically.
+EXCHANGE_BENCHMARKS: dict[str, str] = {
+    "DFM": "DFM:DFMGI",
+    "ADX": "ADX:FADGI",
+    "LSE": "FTSE-UKX",
+    "FTSE": "FTSE-UKX",
+    "LON": "FTSE-UKX",
+    "NYSE": "TVC:SPX",
+    "NASDAQ": "TVC:SPX",
+    "AMEX": "TVC:SPX",
+    "NYSEARCA": "TVC:SPX",
+    "ARCA": "TVC:SPX",
+    "BATS": "TVC:SPX",
+    "CBOE": "TVC:SPX",
+}
+
+
+def _benchmark_for_exchange(exchange: object) -> str | None:
+    value = str(exchange or "").strip().upper()
+    return EXCHANGE_BENCHMARKS.get(value)
+
+
+def _annualize(total_return: float, days: int) -> float:
+    if days <= 0:
+        return total_return
+    if total_return <= -1:
+        return -1.0
+    return (1.0 + total_return) ** (365.0 / days) - 1.0
+
+
+def _xnpv(rate: float, cash_flows: list[tuple[date, float]]) -> float:
+    origin = cash_flows[0][0]
+    return sum(
+        amount / (1.0 + rate) ** ((when - origin).days / 365.0)
+        for when, amount in cash_flows
+    )
+
+
+def _xirr(cash_flows: list[tuple[date, float]]) -> float | None:
+    """Return an annualized money-weighted return, or None if not solvable."""
+    flows = [(when, float(amount)) for when, amount in cash_flows if amount]
+    if (
+        not flows
+        or not any(amount < 0 for _, amount in flows)
+        or not any(amount > 0 for _, amount in flows)
+    ):
+        return None
+
+    lower = -0.999999
+    upper = 1.0
+    lower_value = _xnpv(lower, flows)
+    upper_value = _xnpv(upper, flows)
+    while lower_value * upper_value > 0 and upper < 1_000_000:
+        upper = (upper + 1.0) * 2.0 - 1.0
+        upper_value = _xnpv(upper, flows)
+
+    if lower_value * upper_value > 0:
+        return None
+    try:
+        return float(brentq(lambda rate: _xnpv(rate, flows), lower, upper))
+    except (ValueError, ZeroDivisionError):
+        return None
+
+
+def _date_index(values: pd.Series | pd.DataFrame) -> pd.DatetimeIndex:
+    index = pd.to_datetime(values.index)
+    if index.tz is not None:
+        index = index.tz_localize(None)
+    return index.normalize()
+
+
+def _snap_to_index(when: date, index: pd.DatetimeIndex) -> pd.Timestamp | None:
+    candidates = index[index >= pd.Timestamp(when)]
+    return candidates.min() if len(candidates) else None
 
 
 def _quarter_label(d: date) -> str:
@@ -312,6 +393,395 @@ class AnalyticsModule(BaseModule):
                 "quarter_projected": round(q_total, 2),
             },
             "events": events[-8:],
+        }
+
+    @staticmethod
+    def get_indexes() -> list[dict]:
+        """Return the configured benchmark choices for API filter controls."""
+        return [
+            {"key": key, "label": details["label"], "exchange": details["exchange"]}
+            for key, details in BENCHMARKS.items()
+            if details.get("type") == "index"
+        ]
+
+    def _benchmark_prices(self, ticker: str, start: date, end: date) -> pd.Series:
+        benchmark = BENCHMARKS.get(ticker)
+        query_ticker = (
+            f"{benchmark['exchange']}:{benchmark['symbol']}" if benchmark else ticker
+        )
+        try:
+            prices = self.hql.ticker(query_ticker).prices(start=start, end=end)
+        except Exception as exc:
+            logger.warning("Unable to load benchmark %s: %s", ticker, exc)
+            return pd.Series(dtype=float, name=ticker)
+
+        if isinstance(prices, pd.DataFrame):
+            if "close" not in prices.columns:
+                return pd.Series(dtype=float, name=ticker)
+            prices = prices["close"]
+        if not isinstance(prices, pd.Series) or prices.empty:
+            return pd.Series(dtype=float, name=ticker)
+
+        prices = pd.to_numeric(prices, errors="coerce").dropna().copy()
+        prices.index = _date_index(prices)
+        return prices.groupby(level=0).last().sort_index().rename(ticker)
+
+    def _benchmark_return(
+        self,
+        ticker: str,
+        start: date,
+        end: date,
+    ) -> float | None:
+        prices = self._benchmark_prices(ticker, start, end)
+        if len(prices) < 2 or prices.iloc[0] <= 0:
+            return None
+        total = float(prices.iloc[-1] / prices.iloc[0] - 1.0)
+        return _annualize(total, max(1, (prices.index[-1] - prices.index[0]).days))
+
+    @staticmethod
+    def _calculate_twr(
+        value_df: pd.DataFrame,
+        transactions: pd.DataFrame,
+        dividends: pd.DataFrame,
+    ) -> tuple[float | None, float | None, date | None, date | None]:
+        """Calculate total and annualized TWR from daily market values.
+
+        Buys and sells are external cash flows. Received dividends are added to
+        the numerator on their payment date, so they count as investment return
+        even though the portfolio value series only contains securities.
+        """
+        if value_df.empty or "market_value_aed" not in value_df.columns:
+            return None, None, None, None
+
+        values = pd.to_numeric(value_df["market_value_aed"], errors="coerce").dropna()
+        if values.empty:
+            return None, None, None, None
+        values.index = _date_index(values)
+        values = values.groupby(level=0).last().sort_index()
+
+        first_day = values.index[0].date()
+        last_day = values.index[-1].date()
+        first_value = float(values.iloc[0])
+        cash_flows: dict[pd.Timestamp, float] = {}
+        dividend_flows: dict[pd.Timestamp, float] = {}
+
+        if not transactions.empty:
+            tx = transactions.copy()
+            tx["_date"] = pd.to_datetime(tx["date"], errors="coerce").dt.date
+            for _, row in tx.dropna(subset=["_date"]).iterrows():
+                when = row["_date"]
+                if when < first_day or when > last_day:
+                    continue
+                # A transaction already appears in the first valuation.  Only
+                # later flows should be removed from the period return.
+                if when == first_day and first_value > 0:
+                    continue
+                snapped = _snap_to_index(when, values.index)
+                if snapped is None:
+                    continue
+                sign = {"buy": 1.0, "sell": -1.0}.get(
+                    str(row.get("transaction", "")).lower(), 0.0
+                )
+                cash_flows[snapped] = cash_flows.get(snapped, 0.0) + sign * float(
+                    row.get("total_cost_aed") or 0.0
+                )
+
+        if not dividends.empty:
+            received = dividends[dividends["status"] == "received"]
+            for _, row in received.iterrows():
+                pay_date = row.get("pay_date")
+                if not pay_date:
+                    continue
+                when = pd.Timestamp(pay_date).date()
+                if when <= first_day or when > last_day:
+                    continue
+                snapped = _snap_to_index(when, values.index)
+                if snapped is not None:
+                    dividend_flows[snapped] = dividend_flows.get(snapped, 0.0) + float(
+                        row.get("total_aed") or 0.0
+                    )
+
+        factors: list[float] = []
+        previous = first_value
+        for day, current in values.iloc[1:].items():
+            if previous > 0:
+                factor = (
+                    float(current)
+                    - cash_flows.get(day, 0.0)
+                    + dividend_flows.get(day, 0.0)
+                ) / previous
+                factors.append(factor)
+            elif float(current) > 0 and cash_flows.get(day, 0.0) > 0:
+                factors.append(1.0)
+            previous = float(current)
+
+        total_return = float(pd.Series(factors).prod() - 1.0) if factors else 0.0
+        annualized = _annualize(total_return, max(1, (last_day - first_day).days))
+        return total_return, annualized, first_day, last_day
+
+    @staticmethod
+    def _calculate_xirr(
+        value_df: pd.DataFrame,
+        transactions: pd.DataFrame,
+        dividends: pd.DataFrame,
+    ) -> float | None:
+        if value_df.empty or "market_value_aed" not in value_df.columns:
+            return None
+        values = pd.to_numeric(value_df["market_value_aed"], errors="coerce").dropna()
+        if values.empty:
+            return None
+        values.index = _date_index(values)
+        values = values.groupby(level=0).last().sort_index()
+        first_day = values.index[0].date()
+        last_day = values.index[-1].date()
+        first_value = float(values.iloc[0])
+        cash_flows: list[tuple[date, float]] = []
+        if first_value > 0:
+            cash_flows.append((first_day, -first_value))
+
+        if not transactions.empty:
+            tx = transactions.copy()
+            tx["_date"] = pd.to_datetime(tx["date"], errors="coerce").dt.date
+            for _, row in tx.dropna(subset=["_date"]).iterrows():
+                when = row["_date"]
+                if when < first_day or when > last_day:
+                    continue
+                if when == first_day and first_value > 0:
+                    continue
+                amount = float(row.get("total_cost_aed") or 0.0)
+                if str(row.get("transaction", "")).lower() == "buy":
+                    amount = -amount
+                elif str(row.get("transaction", "")).lower() != "sell":
+                    continue
+                cash_flows.append((when, amount))
+
+        if not dividends.empty:
+            received = dividends[dividends["status"] == "received"]
+            for _, row in received.iterrows():
+                pay_date = row.get("pay_date")
+                if not pay_date:
+                    continue
+                when = pd.Timestamp(pay_date).date()
+                if first_day < when <= last_day:
+                    cash_flows.append((when, float(row.get("total_aed") or 0.0)))
+
+        cash_flows.append((last_day, float(values.iloc[-1])))
+        return _xirr(sorted(cash_flows, key=lambda item: item[0]))
+
+    def get_performance(
+        self,
+        filters: PortfolioFilters,
+        *,
+        benchmark: str | None = None,
+        index_scope: Literal["all", "mapped"] = "all",
+    ) -> dict:
+        """Return alpha, XIRR, TWR, and timing skill for a filtered portfolio."""
+        benchmark_key = None
+        if benchmark:
+            benchmark_key = next(
+                (key for key in BENCHMARKS if key.upper() == benchmark.upper()), None
+            )
+            if (
+                benchmark_key is None
+                or BENCHMARKS[benchmark_key].get("type") != "index"
+            ):
+                raise ValueError(f"Unknown index benchmark: {benchmark}")
+        if index_scope == "mapped" and benchmark_key is None:
+            raise ValueError("index_scope='mapped' requires an index benchmark")
+
+        p = self.hql.portfolio()
+        tx = p.transactions()
+        empty_summary = {
+            "xirr_pct": None,
+            "twr_pct": None,
+            "twr_total_pct": None,
+            "timing_skill_pct": None,
+            "alpha_pct": None,
+            "benchmark_return_pct": None,
+            "benchmark_coverage_pct": 0.0,
+        }
+        if tx.empty:
+            return {
+                "benchmark": benchmark_key,
+                "index_scope": index_scope,
+                "summary": empty_summary,
+                "positions": [],
+            }
+
+        tx = tx.copy()
+        tx["_date"] = pd.to_datetime(tx["date"], errors="coerce").dt.date
+        tx = tx[tx["_date"].isna() | (tx["_date"] <= filters.date_range.end)]
+        if filters.tickers:
+            tx = tx[tx["ticker"].isin(filters.tickers)]
+        if filters.sectors:
+            tx = tx[tx["sector"].isin(filters.sectors)]
+        if filters.exchanges:
+            tx = tx[tx["exchange"].isin(filters.exchanges)]
+        if tx.empty:
+            return {
+                "benchmark": benchmark_key,
+                "index_scope": index_scope,
+                "summary": empty_summary,
+                "positions": [],
+            }
+
+        meta = tx.sort_values("_date").drop_duplicates("ticker", keep="first").copy()
+        meta["mapped_benchmark"] = meta["exchange"].map(_benchmark_for_exchange)
+        if index_scope == "mapped":
+            meta = meta[meta["mapped_benchmark"] == benchmark_key]
+        if meta.empty:
+            return {
+                "benchmark": benchmark_key,
+                "index_scope": index_scope,
+                "summary": empty_summary,
+                "positions": [],
+            }
+
+        tickers = meta["ticker"].tolist()
+        tx = tx[tx["ticker"].isin(tickers)]
+        divs = p.dividends()
+        if not divs.empty:
+            divs = divs[divs["ticker"].isin(tickers)].copy()
+
+        portfolio_values = p.value(
+            start_date=filters.date_range.start,
+            end_date=filters.date_range.end,
+            tickers=tickers,
+        )
+        twr_total, twr_annualized, first_day, last_day = self._calculate_twr(
+            portfolio_values, tx, divs
+        )
+        xirr = self._calculate_xirr(portfolio_values, tx, divs)
+
+        holdings = p.holdings()
+        if not holdings.empty:
+            holdings = holdings[holdings["ticker"].isin(tickers)].copy()
+            market_total = float(holdings["market_value_aed"].sum())
+        else:
+            market_total = 0.0
+
+        benchmark_cache: dict[str, float | None] = {}
+        positions: list[dict] = []
+        weighted_benchmark = 0.0
+        weighted_coverage = 0.0
+
+        for _, row in meta.iterrows():
+            ticker = row["ticker"]
+            ticker_benchmark = benchmark_key or row["mapped_benchmark"]
+            holding = (
+                holdings[holdings["ticker"] == ticker]
+                if not holdings.empty
+                else pd.DataFrame()
+            )
+            market_value = (
+                float(holding["market_value_aed"].iloc[0]) if not holding.empty else 0.0
+            )
+            weight = market_value / market_total if market_total > 0 else 0.0
+            ticker_tx = tx[tx["ticker"] == ticker]
+            ticker_divs = divs[divs["ticker"] == ticker] if not divs.empty else divs
+            ticker_values = p.value(
+                start_date=filters.date_range.start,
+                end_date=filters.date_range.end,
+                tickers=[ticker],
+            )
+            _, position_twr, _, _ = self._calculate_twr(
+                ticker_values, ticker_tx, ticker_divs
+            )
+
+            if ticker_benchmark:
+                if ticker_benchmark not in benchmark_cache:
+                    benchmark_cache[ticker_benchmark] = self._benchmark_return(
+                        ticker_benchmark,
+                        filters.date_range.start,
+                        filters.date_range.end,
+                    )
+                benchmark_return = benchmark_cache[ticker_benchmark]
+            else:
+                benchmark_return = None
+
+            position_alpha = (
+                (position_twr - benchmark_return) * 100
+                if position_twr is not None and benchmark_return is not None
+                else None
+            )
+            if benchmark_return is not None:
+                weighted_benchmark += weight * benchmark_return
+                weighted_coverage += weight
+
+            positions.append(
+                {
+                    "ticker": ticker,
+                    "exchange": row.get("exchange"),
+                    "sector": row.get("sector"),
+                    "index": ticker_benchmark,
+                    "index_label": (
+                        BENCHMARKS.get(ticker_benchmark, {}).get("label")
+                        if ticker_benchmark
+                        else None
+                    ),
+                    "market_value": round(market_value, 2),
+                    "weight_pct": round(weight * 100, 2),
+                    "twr_pct": (
+                        round(position_twr * 100, 2)
+                        if position_twr is not None
+                        else None
+                    ),
+                    "benchmark_return_pct": (
+                        round(benchmark_return * 100, 2)
+                        if benchmark_return is not None
+                        else None
+                    ),
+                    "alpha_pct": (
+                        round(position_alpha, 2) if position_alpha is not None else None
+                    ),
+                }
+            )
+
+        benchmark_return = weighted_benchmark if weighted_coverage else None
+        alpha = (
+            (twr_annualized - benchmark_return) * 100
+            if twr_annualized is not None and benchmark_return is not None
+            else None
+        )
+        timing_skill = (
+            (xirr - twr_annualized) * 100
+            if xirr is not None and twr_annualized is not None
+            else None
+        )
+
+        summary = {
+            "xirr_pct": round(xirr * 100, 2) if xirr is not None else None,
+            "twr_pct": (
+                round(twr_annualized * 100, 2) if twr_annualized is not None else None
+            ),
+            "twr_total_pct": (
+                round(twr_total * 100, 2) if twr_total is not None else None
+            ),
+            "timing_skill_pct": (
+                round(timing_skill, 2) if timing_skill is not None else None
+            ),
+            "alpha_pct": round(alpha, 2) if alpha is not None else None,
+            "benchmark_return_pct": (
+                round(benchmark_return * 100, 2)
+                if benchmark_return is not None
+                else None
+            ),
+            "benchmark_coverage_pct": round(weighted_coverage * 100, 2),
+            "period_start": first_day.isoformat() if first_day else None,
+            "period_end": last_day.isoformat() if last_day else None,
+        }
+        return {
+            "benchmark": (
+                {
+                    "key": benchmark_key,
+                    "label": BENCHMARKS[benchmark_key]["label"],
+                }
+                if benchmark_key
+                else None
+            ),
+            "index_scope": index_scope,
+            "summary": summary,
+            "positions": positions,
         }
 
     @staticmethod

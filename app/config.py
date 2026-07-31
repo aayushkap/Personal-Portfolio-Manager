@@ -88,4 +88,10 @@ BENCHMARKS: dict[str, dict] = {
         "symbol": "UKX",
         "type": "index",
     },
+    "NSE-NIFTY": {
+        "label": "NIFTY 50 Index",
+        "exchange": "NSE",
+        "symbol": "NIFTY",
+        "type": "index",
+    },
 }

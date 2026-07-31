@@ -20,7 +20,7 @@ schemas needed unless strict typing is required later.
 from __future__ import annotations
 
 from datetime import date, timedelta
-from typing import Optional, List
+from typing import Optional, List, Literal
 
 from pydantic import BaseModel, field_validator, model_validator
 
@@ -96,3 +96,10 @@ class FilterRequest(BaseModel):
             exchanges=self.exchanges,
             tickers=self.tickers,
         )
+
+
+class AnalyticsPerformanceRequest(FilterRequest):
+    """Filters for alpha, XIRR, TWR, and timing-skill analytics."""
+
+    index: Optional[str] = None
+    index_scope: Literal["all", "mapped"] = "all"

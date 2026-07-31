@@ -36,7 +36,7 @@ Do not rely on memory. Do not invent dates.
 CRITICAL RULE: Only report news dated STRICTLY AFTER {since_date}.
 Do not repeat, rephrase, or re-report anything at or before that date, even if
 it still seems relevant. If genuinely nothing material happened after that date,
-return an empty news list — do not pad with old or filler items.
+return an empty news list — do not pad with old or filler items. Ensure you reference the latest data, verify the dates and ensure information is up to date.
 
 Focus only on things that matter to an investor holding this stock:
 - Earnings results or updated guidance

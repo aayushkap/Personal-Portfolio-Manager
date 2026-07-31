@@ -95,8 +95,15 @@ class PriceRepository:
         if df.empty:
             return pd.DataFrame(columns=expected)
 
-        raw = self._cache_repo.get_raw_ticker(ticker)
-        currency = self._cache_repo.resolve_currency(raw)
+        # Benchmarks are OHLC-only instruments from config.py and may not have
+        # a fundamentals cache entry. Their currency is irrelevant for return
+        # ratios, so keep the HQL price query usable with an AED-neutral
+        # fallback when no raw ticker document exists.
+        try:
+            raw = self._cache_repo.get_raw_ticker(ticker)
+            currency = self._cache_repo.resolve_currency(raw)
+        except HQLTickerNotFound:
+            currency = "AED"
 
         df["close"] = pd.to_numeric(df["close"], errors="coerce").map(
             lambda v: self._fx.to_aed(v, currency) if pd.notna(v) else pd.NA

@@ -19,7 +19,7 @@ from app.services.watchlist_ai import WatchlistAIScreener
 from app.data.db import DB
 from app.services.holdings_news import HoldingsNewsAgent
 
-from datetime import date
+from datetime import date, datetime, timedelta
 
 logger = get_logger()
 
@@ -54,6 +54,60 @@ def _was_scraped_this_week(cached_data: dict | None) -> bool:
         return False
     return (
         _week_key_from_scraped_at(cached_data.get("scraped_at")) == _current_week_key()
+    )
+
+
+def _session_time(session_date: date, value: object) -> datetime:
+    """Build a Dubai datetime from a configurable ``HH:MM`` session value."""
+    hour, minute = map(int, str(value).split(":", 1))
+    return datetime(
+        session_date.year,
+        session_date.month,
+        session_date.day,
+        hour,
+        minute,
+        tzinfo=DUBAI_TZ,
+    )
+
+
+def _is_ohlc_exchange_open(exchange: object, now: datetime | None = None) -> bool:
+    """Whether an exchange is within its configured UAE OHLC refresh window."""
+    current = (now or dubai_now()).astimezone(DUBAI_TZ)
+
+    # OHLC refreshes are never run on Saturday or Sunday, including any apparent
+    # overnight buffer after Friday's US session.
+    if current.weekday() >= 5:
+        return False
+
+    exchange_key = str(exchange or "").strip().upper()
+    session = app.config.OHLC_MARKET_SESSIONS.get(
+        exchange_key, app.config.OHLC_MARKET_SESSIONS["DEFAULT"]
+    )
+    session_weekdays = set(session["weekdays"])
+    buffer = timedelta(minutes=app.config.OHLC_SESSION_BUFFER_MINUTES)
+
+    # Check today's session and the preceding one.  The latter is needed for US
+    # sessions whose 00:00 close and post-close buffer cross into the next day.
+    for session_date in (current.date(), current.date() - timedelta(days=1)):
+        if session_date.weekday() not in session_weekdays:
+            continue
+
+        opens_at = _session_time(session_date, session["open"])
+        closes_at = _session_time(session_date, session["close"])
+        if closes_at <= opens_at:
+            closes_at += timedelta(days=1)
+
+        if opens_at - buffer <= current <= closes_at + buffer:
+            return True
+
+    return False
+
+
+def _is_any_ohlc_market_open(now: datetime | None = None) -> bool:
+    """Return whether at least one configured OHLC session is currently active."""
+    return any(
+        _is_ohlc_exchange_open(exchange, now)
+        for exchange in app.config.OHLC_MARKET_SESSIONS
     )
 
 
@@ -152,19 +206,34 @@ async def ohlc_job(bars: int = 50):
             tickers += benchmark_list
 
             seen = set()
+            refreshed = 0
+            skipped_by_exchange: dict[str, int] = defaultdict(int)
             for t in tickers:
                 key = t.get("ticker")
                 if not key or key in seen:
                     continue
                 seen.add(key)
+
+                exchange = t.get("exchange")
+                if not _is_ohlc_exchange_open(exchange):
+                    skipped_by_exchange[str(exchange or "UNKNOWN").upper()] += 1
+                    continue
+
                 try:
                     await _set_ohlc(
-                        tv_exchange=t["exchange"],
+                        tv_exchange=exchange,
                         symbol=t["symbol"],
                         bars=bars,
                     )
+                    refreshed += 1
                 except Exception:
                     logger.exception("OHLC failed for %s", key)
+
+            logger.info(
+                "OHLC job complete | refreshed=%d skipped_closed=%s",
+                refreshed,
+                dict(skipped_by_exchange),
+            )
         except Exception:
             logger.exception("OHLC job failed")
 
@@ -353,7 +422,7 @@ async def job_runner():
     """
     Serial orchestrator for heavy jobs only.
 
-    Market hours (Mon-Fri 10:00-23:00 Dubai):
+    Any configured market window (including its buffer):
       OHLC -> one fundamentals drip -> sleep until next 15-min cycle.
 
     Off-hours:
@@ -365,15 +434,16 @@ async def job_runner():
     while True:
         try:
             cycle_start = dubai_now()
-            hour = cycle_start.hour
             weekday = cycle_start.weekday()  # 0=Mon ... 6=Sun
-            is_market_hours = (weekday < 5) and (10 <= hour <= 23)
+            is_ohlc_window = _is_any_ohlc_market_open(cycle_start)
 
-            if is_market_hours:
-                logger.info("Job runner: market hours — running OHLC")
+            if is_ohlc_window:
+                logger.info("Job runner: active OHLC market window — running OHLC")
                 await ohlc_job()
 
-                logger.info("Job runner: market hours — running one drip scrape")
+                logger.info(
+                    "Job runner: active OHLC market window — running one drip scrape"
+                )
                 drip_status = await fundamentals_drip_job()
 
                 elapsed = (dubai_now() - cycle_start).total_seconds()

@@ -14,6 +14,26 @@ GEMINI_KEY = os.getenv("GEMINI_KEY")
 
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
+# All times are Asia/Dubai.  The worker applies this buffer on both sides of a
+# session when deciding whether an instrument needs an intraday OHLC refresh.
+OHLC_SESSION_BUFFER_MINUTES = 60
+
+# Configure exceptions here; exchanges not listed use DEFAULT (US market hours).
+# Weekdays use Python's convention: Monday=0 through Friday=4.
+OHLC_MARKET_SESSIONS: dict[str, dict[str, object]] = {
+    "ADX": {"open": "10:00", "close": "15:00", "weekdays": (0, 1, 2, 3, 4)},
+    "DFM": {"open": "10:00", "close": "15:00", "weekdays": (0, 1, 2, 3, 4)},
+    "LSE": {"open": "10:00", "close": "17:30", "weekdays": (0, 1, 2, 3, 4)},
+    # TradingView symbols and the configured FTSE benchmark can use these aliases.
+    "LON": {"open": "10:00", "close": "17:30", "weekdays": (0, 1, 2, 3, 4)},
+    "FTSE": {"open": "10:00", "close": "17:30", "weekdays": (0, 1, 2, 3, 4)},
+    "DEFAULT": {
+        "open": "17:30",
+        "close": "00:00",
+        "weekdays": (0, 1, 2, 3, 4),
+    },
+}
+
 
 BENCHMARKS: dict[str, dict] = {
     "DFM:DFMGI": {
@@ -50,6 +70,18 @@ BENCHMARKS: dict[str, dict] = {
         "label": "US Government Bonds 10 YR Yield",
         "exchange": "TVC",
         "symbol": "US10Y",
+        "type": "index",
+    },
+    "TVC:US20Y": {
+        "label": "US Government Bonds 20 YR Yield",
+        "exchange": "TVC",
+        "symbol": "US20Y",
+        "type": "index",
+    },
+    "TVC:US30Y": {
+        "label": "US Government Bonds 30 YR Yield",
+        "exchange": "TVC",
+        "symbol": "US30Y",
         "type": "index",
     },
     "AMEX:XLE": {

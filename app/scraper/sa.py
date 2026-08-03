@@ -276,15 +276,20 @@ class StockAnalysisScraper:
         self, page: Page, exchange: str, symbol: str, is_etf: bool = False
     ) -> Dict[str, Any]:
         """Scrape the financials table. Returns empty result for ETFs."""
+        # Keep the URL exposed in the historical JSON contract. StockAnalysis moved
+        # the income statement to a child route, which is used only for navigation.
         url = f"{self._get_base_url(exchange, symbol, is_etf)}/financials/"
+        scrape_url = f"{url}income-statement/"
 
         logger.info(f"Scraping financials for ticker: \t {exchange}:{symbol}")
 
-        await self._safe_goto(page, url)
+        await self._safe_goto(page, scrape_url)
         await self._human_mouse_wander(page)
 
         try:
-            await page.wait_for_selector("#main-table", timeout=20000)
+            # Current layout: #main-table-main.  Retain #main-table support for
+            # any pages still served with the legacy layout.
+            await page.wait_for_selector("#main-table-main, #main-table", timeout=20000)
         except Exception:
             await page.wait_for_selector("table", timeout=5000)
 
@@ -295,12 +300,21 @@ class StockAnalysisScraper:
         rows = []
 
         try:
+            table = await page.query_selector("#main-table-main, #main-table")
+            if not table:
+                table = await page.query_selector("table")
+            if not table:
+                raise RuntimeError("financials table not found")
+
             header_cells = await page.query_selector_all(
+                "#main-table-main thead tr:first-child th, "
                 "#main-table thead tr:first-child th"
             )
+            if not header_cells:
+                header_cells = await table.query_selector_all("thead tr:first-child th")
             headers = [(await c.inner_text()).strip() for c in header_cells]
 
-            data_rows = await page.query_selector_all("#main-table tbody tr")
+            data_rows = await table.query_selector_all("tbody tr")
             for row in data_rows:
                 cells = await row.query_selector_all("td")
                 values = [(await c.inner_text()).strip() for c in cells]
@@ -480,7 +494,10 @@ class StockAnalysisScraper:
         await self._human_mouse_wander(page)
 
         try:
-            await page.wait_for_selector("#main-table", timeout=20000)
+            # Ratios are now split into category tables, each with an ID such as
+            # main-table-total-valuation.  The prefix also includes the legacy
+            # #main-table ID.
+            await page.wait_for_selector("table[id^='main-table']", timeout=20000)
         except Exception:
             await page.wait_for_selector("table", timeout=15000)
 
@@ -491,21 +508,28 @@ class StockAnalysisScraper:
         rows = []
 
         try:
-            header_cells = await page.query_selector_all(
-                "#main-table thead tr:first-child th"
-            )
+            tables = await page.query_selector_all("table[id^='main-table']")
+            if not tables:
+                tables = await page.query_selector_all("table")
+            if not tables:
+                raise RuntimeError("ratios tables not found")
+
+            header_cells = await tables[0].query_selector_all("thead tr:first-child th")
             headers = [(await c.inner_text()).strip() for c in header_cells]
 
-            data_rows = await page.query_selector_all("#main-table tbody tr")
-            for row in data_rows:
-                cells = await row.query_selector_all("td")
-                values = [(await c.inner_text()).strip() for c in cells]
-                if values:
-                    row_dict = {}
-                    for i, val in enumerate(values):
-                        col_name = headers[i] if i < len(headers) else f"col_{i}"
-                        row_dict[col_name] = val
-                    rows.append(row_dict)
+            # Flatten the category tables in document order.  This preserves the
+            # historical single headers/rows JSON shape used by the UI and HQL.
+            for table in tables:
+                data_rows = await table.query_selector_all("tbody tr")
+                for row in data_rows:
+                    cells = await row.query_selector_all("td")
+                    values = [(await c.inner_text()).strip() for c in cells]
+                    if values:
+                        row_dict = {}
+                        for i, val in enumerate(values):
+                            col_name = headers[i] if i < len(headers) else f"col_{i}"
+                            row_dict[col_name] = val
+                        rows.append(row_dict)
         except Exception as exc:
             rows = [{"error": str(exc)}]
 
@@ -639,7 +663,7 @@ class StockAnalysisScraper:
 
 async def main():
     obj = StockAnalysisScraper(headless=False)
-    res = await obj.scrape({"exchange": "NYSE", "symbol": "RDDT"})
+    res = await obj.scrape({"exchange": "DFM", "symbol": "DUBAIRESI"})
     import json
 
     with open("filename.json", "w") as f:

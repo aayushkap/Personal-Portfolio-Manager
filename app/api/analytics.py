@@ -46,7 +46,7 @@ async def get_performance(
 ):
     try:
         return module.get_performance(
-            body.to_filters(), benchmark=body.index, index_scope=body.index_scope
+            body.to_filters(), include_dividends=body.include_dividends
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

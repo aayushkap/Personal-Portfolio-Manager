@@ -98,8 +98,16 @@ class FilterRequest(BaseModel):
         )
 
 
-class AnalyticsPerformanceRequest(FilterRequest):
-    """Filters for alpha, XIRR, TWR, and timing-skill analytics."""
+class AnalyticsPerformanceRequest(BaseModel):
+    """Request options for portfolio performance analytics.
 
-    index: Optional[str] = None
-    index_scope: Literal["all", "mapped"] = "all"
+    Performance is always calculated for the complete portfolio. Keeping this
+    request deliberately small prevents its return and benchmark calculations
+    from being compared across different, independently filtered universes.
+    """
+
+    date_range: DateRangeRequest = Field(default_factory=DateRangeRequest)
+    include_dividends: bool = True
+
+    def to_filters(self) -> PortfolioFilters:
+        return PortfolioFilters(date_range=self.date_range.to_domain())

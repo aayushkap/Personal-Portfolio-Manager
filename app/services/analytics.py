@@ -35,6 +35,18 @@ EXCHANGE_BENCHMARKS: dict[str, str] = {
     "CBOE": "TVC:SPX",
 }
 
+PERFORMANCE_STATISTIC_DESCRIPTIONS: dict[str, str] = {
+    "xirr_pct": "Annualized money-weighted return, reflecting the timing and size of your contributions and withdrawals.",
+    "twr_pct": "Annualized time-weighted return, measuring investment performance independently of cash-flow timing.",
+    "twr_total_pct": "Cumulative time-weighted return over the selected date range, before annualization.",
+    "timing_skill_pct": "Difference between money-weighted and time-weighted return; positive values indicate that cash-flow timing helped returns.",
+    "alpha_pct": "Annualized portfolio return above or below the weighted benchmark return for the selected period.",
+    "benchmark_return_pct": "Annualized return of the portfolio's current-holding-weighted mapped benchmarks for the selected period.",
+    "benchmark_coverage_pct": "Percentage of current portfolio market value that has an exchange-mapped benchmark available.",
+    "period_start": "First portfolio valuation date used to calculate the selected-period returns.",
+    "period_end": "Last portfolio valuation date used to calculate the selected-period returns.",
+}
+
 
 def _benchmark_for_exchange(exchange: object) -> str | None:
     value = str(exchange or "").strip().upper()
@@ -426,17 +438,23 @@ class AnalyticsModule(BaseModule):
         prices.index = _date_index(prices)
         return prices.groupby(level=0).last().sort_index().rename(ticker)
 
-    def _benchmark_return(
+    def _benchmark_returns(
         self,
         ticker: str,
         start: date,
         end: date,
-    ) -> float | None:
+    ) -> dict | None:
         prices = self._benchmark_prices(ticker, start, end)
         if len(prices) < 2 or prices.iloc[0] <= 0:
             return None
         total = float(prices.iloc[-1] / prices.iloc[0] - 1.0)
-        return _annualize(total, max(1, (prices.index[-1] - prices.index[0]).days))
+        days = max(1, (prices.index[-1] - prices.index[0]).days)
+        return {
+            "total_return": total,
+            "annualized_return": _annualize(total, days),
+            "period_start": prices.index[0].date().isoformat(),
+            "period_end": prices.index[-1].date().isoformat(),
+        }
 
     @staticmethod
     def _calculate_twr(
@@ -572,22 +590,9 @@ class AnalyticsModule(BaseModule):
         self,
         filters: PortfolioFilters,
         *,
-        benchmark: str | None = None,
-        index_scope: Literal["all", "mapped"] = "all",
+        include_dividends: bool = True,
     ) -> dict:
-        """Return alpha, XIRR, TWR, and timing skill for a filtered portfolio."""
-        benchmark_key = None
-        if benchmark:
-            benchmark_key = next(
-                (key for key in BENCHMARKS if key.upper() == benchmark.upper()), None
-            )
-            if (
-                benchmark_key is None
-                or BENCHMARKS[benchmark_key].get("type") != "index"
-            ):
-                raise ValueError(f"Unknown index benchmark: {benchmark}")
-        if index_scope == "mapped" and benchmark_key is None:
-            raise ValueError("index_scope='mapped' requires an index benchmark")
+        """Return whole-portfolio performance and mapped benchmark returns."""
 
         p = self.hql.portfolio()
         tx = p.transactions()
@@ -599,41 +604,36 @@ class AnalyticsModule(BaseModule):
             "alpha_pct": None,
             "benchmark_return_pct": None,
             "benchmark_coverage_pct": 0.0,
+            "period_start": None,
+            "period_end": None,
+            "descriptions": PERFORMANCE_STATISTIC_DESCRIPTIONS,
         }
         if tx.empty:
             return {
-                "benchmark": benchmark_key,
-                "index_scope": index_scope,
+                "include_dividends": include_dividends,
                 "summary": empty_summary,
+                "benchmark_returns": {},
                 "positions": [],
             }
 
         tx = tx.copy()
         tx["_date"] = pd.to_datetime(tx["date"], errors="coerce").dt.date
         tx = tx[tx["_date"].isna() | (tx["_date"] <= filters.date_range.end)]
-        if filters.tickers:
-            tx = tx[tx["ticker"].isin(filters.tickers)]
-        if filters.sectors:
-            tx = tx[tx["sector"].isin(filters.sectors)]
-        if filters.exchanges:
-            tx = tx[tx["exchange"].isin(filters.exchanges)]
         if tx.empty:
             return {
-                "benchmark": benchmark_key,
-                "index_scope": index_scope,
+                "include_dividends": include_dividends,
                 "summary": empty_summary,
+                "benchmark_returns": {},
                 "positions": [],
             }
 
         meta = tx.sort_values("_date").drop_duplicates("ticker", keep="first").copy()
         meta["mapped_benchmark"] = meta["exchange"].map(_benchmark_for_exchange)
-        if index_scope == "mapped":
-            meta = meta[meta["mapped_benchmark"] == benchmark_key]
         if meta.empty:
             return {
-                "benchmark": benchmark_key,
-                "index_scope": index_scope,
+                "include_dividends": include_dividends,
                 "summary": empty_summary,
+                "benchmark_returns": {},
                 "positions": [],
             }
 
@@ -642,12 +642,21 @@ class AnalyticsModule(BaseModule):
         divs = p.dividends()
         if not divs.empty:
             divs = divs[divs["ticker"].isin(tickers)].copy()
+        if not include_dividends:
+            divs = pd.DataFrame()
 
         portfolio_values = p.value(
             start_date=filters.date_range.start,
             end_date=filters.date_range.end,
             tickers=tickers,
         )
+        # PortfolioQuery includes earlier transaction history to construct the
+        # opening holdings correctly. Returns, however, must begin at the
+        # requested start date just like the benchmark series.
+        if not portfolio_values.empty:
+            portfolio_values = portfolio_values.loc[
+                portfolio_values.index >= pd.Timestamp(filters.date_range.start)
+            ]
         twr_total, twr_annualized, first_day, last_day = self._calculate_twr(
             portfolio_values, tx, divs
         )
@@ -660,14 +669,17 @@ class AnalyticsModule(BaseModule):
         else:
             market_total = 0.0
 
-        benchmark_cache: dict[str, float | None] = {}
+        benchmark_cache: dict[str, dict | None] = {}
         positions: list[dict] = []
         weighted_benchmark = 0.0
         weighted_coverage = 0.0
 
-        for _, row in meta.iterrows():
+        current_tickers = set(holdings["ticker"]) if not holdings.empty else set()
+        position_meta = meta[meta["ticker"].isin(current_tickers)]
+
+        for _, row in position_meta.iterrows():
             ticker = row["ticker"]
-            ticker_benchmark = benchmark_key or row["mapped_benchmark"]
+            ticker_benchmark = row["mapped_benchmark"]
             holding = (
                 holdings[holdings["ticker"] == ticker]
                 if not holdings.empty
@@ -684,20 +696,33 @@ class AnalyticsModule(BaseModule):
                 end_date=filters.date_range.end,
                 tickers=[ticker],
             )
+            if not ticker_values.empty:
+                ticker_values = ticker_values.loc[
+                    ticker_values.index >= pd.Timestamp(filters.date_range.start)
+                ]
             _, position_twr, _, _ = self._calculate_twr(
                 ticker_values, ticker_tx, ticker_divs
             )
 
             if ticker_benchmark:
                 if ticker_benchmark not in benchmark_cache:
-                    benchmark_cache[ticker_benchmark] = self._benchmark_return(
+                    benchmark_cache[ticker_benchmark] = self._benchmark_returns(
                         ticker_benchmark,
                         filters.date_range.start,
                         filters.date_range.end,
                     )
-                benchmark_return = benchmark_cache[ticker_benchmark]
+                benchmark_data = benchmark_cache[ticker_benchmark]
+                benchmark_return = (
+                    benchmark_data["annualized_return"] if benchmark_data else None
+                )
             else:
                 benchmark_return = None
+
+            try:
+                logo_url = self.hql.ticker(ticker).info().get("logo_url")
+            except Exception as exc:
+                logger.warning("Unable to load logo for %s: %s", ticker, exc)
+                logo_url = None
 
             position_alpha = (
                 (position_twr - benchmark_return) * 100
@@ -711,6 +736,7 @@ class AnalyticsModule(BaseModule):
             positions.append(
                 {
                     "ticker": ticker,
+                    "logo_url": logo_url,
                     "exchange": row.get("exchange"),
                     "sector": row.get("sector"),
                     "index": ticker_benchmark,
@@ -769,18 +795,23 @@ class AnalyticsModule(BaseModule):
             "benchmark_coverage_pct": round(weighted_coverage * 100, 2),
             "period_start": first_day.isoformat() if first_day else None,
             "period_end": last_day.isoformat() if last_day else None,
+            "descriptions": PERFORMANCE_STATISTIC_DESCRIPTIONS,
+        }
+        benchmark_returns = {
+            ticker: {
+                "label": BENCHMARKS.get(ticker, {}).get("label", ticker),
+                "total_return_pct": round(data["total_return"] * 100, 2),
+                "annualized_return_pct": round(data["annualized_return"] * 100, 2),
+                "period_start": data["period_start"],
+                "period_end": data["period_end"],
+            }
+            for ticker, data in benchmark_cache.items()
+            if data is not None
         }
         return {
-            "benchmark": (
-                {
-                    "key": benchmark_key,
-                    "label": BENCHMARKS[benchmark_key]["label"],
-                }
-                if benchmark_key
-                else None
-            ),
-            "index_scope": index_scope,
+            "include_dividends": include_dividends,
             "summary": summary,
+            "benchmark_returns": benchmark_returns,
             "positions": positions,
         }
 

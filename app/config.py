@@ -16,7 +16,7 @@ CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 # All times are Asia/Dubai.  The worker applies this buffer on both sides of a
 # session when deciding whether an instrument needs an intraday OHLC refresh.
-OHLC_SESSION_BUFFER_MINUTES = 60
+OHLC_SESSION_BUFFER_MINUTES = 30
 
 # Configure exceptions here; exchanges not listed use DEFAULT (US market hours).
 # Weekdays use Python's convention: Monday=0 through Friday=4.

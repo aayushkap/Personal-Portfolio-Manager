@@ -45,6 +45,7 @@ class OverviewModule(BaseModule):
         filters: PortfolioFilters,
         include_events: bool = False,
         breakdown: bool = False,
+        period_returns: bool = False,
     ) -> dict:
         result = self._get_overview(
             start_date=filters.date_range.start,
@@ -52,6 +53,7 @@ class OverviewModule(BaseModule):
             include_events=include_events,
             tickers=filters.tickers,
             sectors=filters.sectors,
+            period_returns=period_returns,
         )
 
         if not result["trend"]:
@@ -99,6 +101,7 @@ class OverviewModule(BaseModule):
         include_events: bool = False,
         tickers: list[str] | None = None,
         sectors: list[str] | None = None,
+        period_returns: bool = False,
     ) -> dict:
         """
             Returns a structured overview of portfolio performance.
@@ -115,6 +118,10 @@ class OverviewModule(BaseModule):
                 End of the window. Defaults to today.
             include_events : bool
                 If True, includes a sorted list of buy/sell/dividend events.
+            period_returns : bool
+                If True, summary return fields cover only start_date through
+                end_date. If False, they remain cumulative through end_date. 
+                Uses the Modified Dietz method to calculate the effective capital base for the period.
 
             Returns
         -
@@ -122,7 +129,9 @@ class OverviewModule(BaseModule):
                 {
                     "summary": {
                         "total_invested":       float,
+                        "ending_total_invested": float,  # period_returns only
                         "market_value":         float,
+                        "ending_market_value":  float,  # period_returns only
                         "price_return":         float,
                         "price_return_pct":      float,
                         "cumulative_divs":   float,
@@ -160,9 +169,23 @@ class OverviewModule(BaseModule):
 
         tickers = self._resolve_tickers(tickers, sectors)
 
-        trend_df = p.value(
-            start_date=start_date, end_date=end_date, tickers=tickers or None
+        # A period return needs the last valuation before start_date as its
+        # opening balance. value() normally trims that row from its result, so
+        # load from inception only for the opt-in period calculation.
+        value_start = start_date
+        if period_returns:
+            scoped_tx = p.transactions()
+            if tickers and not scoped_tx.empty:
+                scoped_tx = scoped_tx[scoped_tx["ticker"].isin(tickers)]
+            if not scoped_tx.empty:
+                first_tx = pd.to_datetime(scoped_tx["date"], errors="coerce").min()
+                if pd.notna(first_tx):
+                    value_start = min(start_date, first_tx.date())
+
+        value_df = p.value(
+            start_date=value_start, end_date=end_date, tickers=tickers or None
         )
+        trend_df = value_df[value_df.index.date >= start_date]
 
         if trend_df.empty:
             return {"summary": None, "trend": [], "events": []}
@@ -184,33 +207,131 @@ class OverviewModule(BaseModule):
         market_val = float(latest["market_value_aed"])
         total_val = float(latest["total_value_aed"])
 
-        # Cumulative received dividends all-time (not just the window)
+        # Received dividends, optionally scoped to the requested period.
         divs_df = p.dividends()
-        cum_divs = (
-            float(divs_df.loc[divs_df["status"] == "received", "total_aed"].sum())
+        if tickers and not divs_df.empty:
+            divs_df = divs_df[divs_df["ticker"].isin(tickers)]
+        received_divs = (
+            divs_df[divs_df["status"] == "received"].copy()
             if not divs_df.empty
-            else 0.0
+            else divs_df
         )
 
-        # Realized P&L = total_value - market_value - cumulative divs
-        realized_pnl = round(total_val - market_val - cum_divs, 2)
+        latest_date = trend_df.index[-1].date()
 
-        price_return = round(market_val - total_inv, 2)
-        total_return = round(total_val - total_inv, 2)
+        def _dividends_through(cutoff: date, *, inclusive: bool = True) -> float:
+            if received_divs.empty:
+                return 0.0
+            pay_dates = pd.to_datetime(
+                received_divs["pay_date"], errors="coerce"
+            ).dt.date
+            mask = pay_dates <= cutoff if inclusive else pay_dates < cutoff
+            return float(received_divs.loc[mask, "total_aed"].sum())
+
+        cum_divs = _dividends_through(latest_date)
+
+        # These are cumulative values by default, preserving the existing API.
+        realized_pnl = total_val - market_val - cum_divs
+        price_return = market_val - total_inv
+        total_return = total_val - total_inv
+        return_base = total_inv
+
+        if period_returns:
+            before_start = value_df[value_df.index.date < start_date]
+            opening = before_start.iloc[-1] if not before_start.empty else None
+
+            opening_inv = (
+                float(opening["total_invested_aed"]) if opening is not None else 0.0
+            )
+            opening_market = (
+                float(opening["market_value_aed"]) if opening is not None else 0.0
+            )
+            opening_total = (
+                float(opening["total_value_aed"]) if opening is not None else 0.0
+            )
+            opening_divs = _dividends_through(start_date, inclusive=False)
+            opening_realized = opening_total - opening_market - opening_divs
+
+            # Subtract each component's opening cumulative value. This makes
+            # Jan-to-Mar report only the P&L generated during Jan-to-Mar.
+            cum_divs -= opening_divs
+            realized_pnl -= opening_realized
+            price_return -= opening_market - opening_inv
+            total_return -= opening_total - opening_inv
+
+            # Modified Dietz capital base: opening market value plus each cash
+            # flow weighted by how long it was invested during the period.
+            # This keeps the percentage meaningful when buys/sells occur inside
+            # the selected range.
+            return_base = opening_market
+            period_days = max((latest_date - start_date).days, 1)
+
+            period_tx = scoped_tx.copy()
+            if not period_tx.empty:
+                period_tx["_date"] = pd.to_datetime(
+                    period_tx["date"], errors="coerce"
+                ).dt.date
+                period_tx = period_tx[
+                    period_tx["_date"].between(start_date, latest_date)
+                ]
+                signs = (
+                    period_tx["transaction"]
+                    .str.lower()
+                    .map({"buy": 1.0, "sell": -1.0})
+                    .fillna(0.0)
+                )
+                amounts = pd.to_numeric(
+                    period_tx["total_cost_aed"], errors="coerce"
+                ).fillna(0.0)
+                for flow_date, flow in zip(period_tx["_date"], amounts * signs):
+                    weight = max((latest_date - flow_date).days, 0) / period_days
+                    return_base += float(flow) * weight
+
+            if not received_divs.empty:
+                pay_dates = pd.to_datetime(
+                    received_divs["pay_date"], errors="coerce"
+                ).dt.date
+                period_divs = received_divs[pay_dates.between(start_date, latest_date)]
+                for pay_date, amount in zip(
+                    pd.to_datetime(period_divs["pay_date"], errors="coerce").dt.date,
+                    pd.to_numeric(period_divs["total_aed"], errors="coerce").fillna(
+                        0.0
+                    ),
+                ):
+                    weight = max((latest_date - pay_date).days, 0) / period_days
+                    return_base -= float(amount) * weight
+
+        realized_pnl = round(realized_pnl, 2)
+        price_return = round(price_return, 2)
+        cum_divs = round(cum_divs, 2)
+        # Build the displayed total from the displayed components so the
+        # response always reconciles exactly to the cent.
+        total_return = round(price_return + cum_divs + realized_pnl, 2)
 
         def _pct(gain: float, base: float) -> float:
             return round(gain / base * 100, 2) if base > 0 else 0.0
 
+        summary_total_inv = round(return_base, 2)
+        summary_market_val = (
+            summary_total_inv + price_return if period_returns else market_val
+        )
         summary = {
-            "total_invested": round(total_inv, 2),
-            "market_value": round(market_val, 2),
+            # In period mode this is the effective capital used as the return
+            # denominator, so the displayed amount reconciles directly with
+            # total_return_pct. The cumulative ending balance remains available
+            # separately for consumers that need the end-of-period snapshot.
+            "total_invested": summary_total_inv,
+            "market_value": round(summary_market_val, 2),
             "price_return": price_return,
-            "price_return_pct": _pct(price_return, total_inv),
-            "cumulative_divs": round(cum_divs, 2),
+            "price_return_pct": _pct(price_return, return_base),
+            "cumulative_divs": cum_divs,
             "realized_pnl": realized_pnl,
             "total_return": total_return,
-            "total_return_pct": _pct(total_return, total_inv),
+            "total_return_pct": _pct(total_return, return_base),
         }
+        if period_returns:
+            summary["ending_total_invested"] = round(total_inv, 2)
+            summary["ending_market_value"] = round(market_val, 2)
 
         # Events (optional)
         events = []

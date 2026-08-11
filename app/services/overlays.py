@@ -19,8 +19,8 @@ OVERLAY_CATALOGUE: dict[str, str] = {
     "PORTFOLIO_VALUE": "Total Portfolio Market Value",
     "TWR": "Time-Weighted Return (%)",
     "DART": "Dividend-Adjusted Return Trajectory (AED)",
-    "COMPOUND_4": "Expected Growth at 4% Annual (Compounded Daily)",
-    "COMPOUND_8": "Expected Growth at 8% Annual (Compounded Daily)",
+    "COMPOUND_5": "Expected Growth at 4% Annual (Compounded Daily)",
+    "COMPOUND_6.5": "Expected Growth at 8% Annual (Compounded Daily)",
     **{k: v["label"] for k, v in BENCHMARKS.items()},
 }
 
@@ -56,8 +56,8 @@ class OverlayResolver:
             "PORTFOLIO_VALUE": self._portfolio_value,
             "TWR": self._twr,
             "DART": self._dart,
-            "COMPOUND_4": self._compound_4,
-            "COMPOUND_8": self._compound_8,
+            "COMPOUND_5": self._COMPOUND_5,
+            "COMPOUND_6.5": self._COMPOUND_65,
         }
         for ticker_key in BENCHMARKS:
             self._map[ticker_key] = self._make_benchmark_resolver(ticker_key)
@@ -350,11 +350,11 @@ class OverlayResolver:
         dart = (twr + daily_divs.cumsum()).combine_first(twr)
         return dart.rename("DART")
 
-    def _compound_4(self, filters: PortfolioFilters) -> pd.Series:
-        return self._compound_at_rate(filters, annual_rate=0.04, name="COMPOUND_4")
+    def _COMPOUND_5(self, filters: PortfolioFilters) -> pd.Series:
+        return self._compound_at_rate(filters, annual_rate=0.05, name="COMPOUND_5")
 
-    def _compound_8(self, filters: PortfolioFilters) -> pd.Series:
-        return self._compound_at_rate(filters, annual_rate=0.08, name="COMPOUND_8")
+    def _COMPOUND_65(self, filters: PortfolioFilters) -> pd.Series:
+        return self._compound_at_rate(filters, annual_rate=0.065, name="COMPOUND_6.5")
 
     def _compound_at_rate(
         self, filters: PortfolioFilters, annual_rate: float, name: str

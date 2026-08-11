@@ -20,7 +20,7 @@ schemas needed unless strict typing is required later.
 from __future__ import annotations
 
 from datetime import date, timedelta
-from typing import Optional, List, Literal
+from typing import Optional, List
 
 from pydantic import BaseModel, field_validator, model_validator
 
@@ -38,6 +38,7 @@ class PerformanceRequest(BaseModel):
     include_events: bool = False
     overlays: List[str] = Field(default_factory=list)
     breakdown: bool = False
+    period_returns: bool = False
 
 
 class DateRangeRequest(BaseModel):

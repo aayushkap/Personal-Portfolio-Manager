@@ -143,10 +143,21 @@ class HoldingsNewsAgent:
                 row["has_new_development"] = False
                 continue
 
+            # ``is_new_development`` is stored with an item when it is first
+            # discovered.  Recalculate it here instead of trusting that cached
+            # value: otherwise a story that was new yesterday remains marked as
+            # new indefinitely in subsequent holdings responses.
             news = entry.get("news", [])
+            for item in news:
+                if isinstance(item, dict):
+                    item["is_new_development"] = self._is_recent(
+                        item.get("date"), today, NEW_DEVELOPMENT_WINDOW_DAYS
+                    )
+
             has_new = any(
-                self._is_recent(item.get("date"), today, NEW_DEVELOPMENT_WINDOW_DAYS)
+                item.get("is_new_development", False)
                 for item in news
+                if isinstance(item, dict)
             )
             row["news"] = news
             row["has_new_development"] = has_new

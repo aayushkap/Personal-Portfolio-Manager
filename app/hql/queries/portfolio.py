@@ -456,8 +456,13 @@ class PortfolioQuery:
                 )
                 running[ticker] = max(0.0, running.get(ticker, 0.0) - shares)
 
+        # Specify the dtype for the empty/no-sales case as well.  Otherwise pandas
+        # creates an object series, which is silently downcast by the fill below
+        # when the daily series is aligned to trading days.
         realized_series = (
-            pd.Series(realized_events).reindex(timeline.date, fill_value=0.0).values
+            pd.Series(realized_events, dtype="float64")
+            .reindex(timeline.date, fill_value=0.0)
+            .values
         )
         cumulative_realized = pd.Series(realized_series, index=timeline).cumsum()
 

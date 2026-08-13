@@ -6,6 +6,10 @@ from app.api.deps import get_watchlist_module
 from app.data.gsheet import GSheet_Manager
 from app.services.watchlist import WatchlistModule
 
+from pydantic import BaseModel
+from fastapi import HTTPException
+from app.data.gsheet import WatchlistNotFoundError
+
 router = APIRouter(prefix="/watchlist", tags=["Watchlist"])
 
 
@@ -27,3 +31,33 @@ def get_watchlist_detail(
         timeframe=timeframe,
         overlays=overlays,
     )
+
+
+class WatchlistUpsert(BaseModel):
+    note: str | None = None
+    criteria: str | None = None
+    tags: list[str] | None = None
+
+
+@router.put("/{ticker:path}")
+def upsert_watchlist_item(ticker: str, payload: WatchlistUpsert):
+    try:
+        return GSheet_Manager().upsert_watchlist_row(
+            ticker=ticker,
+            note=payload.note,
+            criteria=payload.criteria,
+            tags=payload.tags,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/{ticker:path}")
+def delete_watchlist_item(ticker: str):
+    try:
+        GSheet_Manager().delete_watchlist_row(ticker)
+    except WatchlistNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"status": "ok"}

@@ -110,7 +110,7 @@ class WatchlistAIScreener:
     # Internals
     def _screen(self, item: dict, fundamentals: dict) -> Optional[dict]:
         ticker = item["ticker"]
-        note = item.get("notes") or ""
+        note = item.get("note") or ""
         criteria = item["criteria"]
         price = item.get("current_price")
 

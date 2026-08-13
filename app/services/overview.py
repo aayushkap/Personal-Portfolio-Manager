@@ -120,7 +120,7 @@ class OverviewModule(BaseModule):
                 If True, includes a sorted list of buy/sell/dividend events.
             period_returns : bool
                 If True, summary return fields cover only start_date through
-                end_date. If False, they remain cumulative through end_date. 
+                end_date. If False, they remain cumulative through end_date.
                 Uses the Modified Dietz method to calculate the effective capital base for the period.
 
             Returns

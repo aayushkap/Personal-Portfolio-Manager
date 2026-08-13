@@ -9,6 +9,14 @@ from app.data.ticker import TickerInfo, parse_ticker
 from app.utils.time_utils import normalise_date
 
 
+class WatchlistConflictError(Exception):
+    pass
+
+
+class WatchlistNotFoundError(Exception):
+    pass
+
+
 class GSheet_Manager:
     SERVICE_ACCOUNT_FILE = os.path.join(
         ACCESS_DIR, os.getenv("GOOGLE_SHEETS_SERVICE_ACCOUNT_FILE")
@@ -70,7 +78,7 @@ class GSheet_Manager:
             result.append(
                 {
                     **_ticker_fields(t),
-                    "notes": str(row.get("Notes", "")).strip() or None,
+                    "note": str(row.get("Note", "")).strip() or None,
                     "criteria": str(row.get("Criteria", "")).strip() or None,
                     "tags": str(row.get("Tags", "")).strip() or None,
                 }
@@ -112,6 +120,120 @@ class GSheet_Manager:
             result.append(clean_row)
 
         return result
+
+    WATCHLIST_HEADERS = ["Instrument", "Note", "Criteria", "Tags"]
+
+    def _ticker_key(self, raw: str) -> str | None:
+        cleaned = str(raw or "").strip().replace(" ", "")
+        t = parse_ticker(cleaned)
+        return t.key if t else None
+
+    def _find_watchlist_row(
+        self, ws, ticker_key: str
+    ) -> tuple[int, list[str], list[str]]:
+        """Fresh scan every call. Returns (row_idx, headers, row_values)."""
+        values = ws.get_all_values()
+        headers = values[0]
+        instrument_idx = headers.index("Instrument")
+
+        for i, row in enumerate(values[1:], start=2):
+            if instrument_idx >= len(row):
+                continue
+            if self._ticker_key(row[instrument_idx]) == ticker_key:
+                return i, headers, row
+
+        return None, headers, None
+
+    def upsert_watchlist_row(
+        self,
+        ticker: str,
+        note: str | None = None,
+        criteria: str | None = None,
+        tags: list[str] | None = None,
+    ) -> dict:
+        t = parse_ticker(str(ticker).strip().replace(" ", ""))
+        if not t:
+            raise ValueError(f"Invalid ticker: {ticker}")
+
+        sh = self._open_sheet()
+        ws = self._worksheet_by_gid(sh, self.WATCHLIST_GID)
+
+        row_idx, headers, current_row = self._find_watchlist_row(ws, t.key)
+
+        if row_idx is None:
+            # Create: fresh row, blank for anything not supplied
+            instrument_str = f"{t.tv_exchange}:{t.tv_symbol}"
+            row = [""] * len(headers)
+            row[headers.index("Instrument")] = instrument_str
+            if "Note" in headers:
+                row[headers.index("Note")] = note or ""
+            if "Criteria" in headers:
+                row[headers.index("Criteria")] = criteria or ""
+            if "Tags" in headers:
+                row[headers.index("Tags")] = _format_tags(tags)
+
+            ws.append_row(row, value_input_option="USER_ENTERED")
+            self._log_audit("watchlist_create", t.key, None, row)
+            return {"ticker": t.key, "instrument": instrument_str, "created": True}
+
+        # Update: only touch fields explicitly provided
+        import gspread.utils as gutils
+
+        fields: dict[str, str] = {}
+        if note is not None:
+            fields["Note"] = note
+        if criteria is not None:
+            fields["Criteria"] = criteria
+        if tags is not None:
+            fields["Tags"] = _format_tags(tags)
+
+        batch = []
+        for field, new_value in fields.items():
+            if field not in headers:
+                continue
+            col_idx = headers.index(field) + 1
+            a1 = gutils.rowcol_to_a1(row_idx, col_idx)
+            batch.append({"range": a1, "values": [[new_value]]})
+
+        if batch:
+            ws.batch_update(batch)
+            self._log_audit("watchlist_update", t.key, current_row, fields)
+
+        return {"ticker": t.key, "created": False}
+
+    # Delete
+    def delete_watchlist_row(self, ticker: str) -> None:
+        t = parse_ticker(str(ticker).strip().replace(" ", ""))
+        if not t:
+            raise ValueError(f"Invalid ticker: {ticker}")
+
+        sh = self._open_sheet()
+        ws = self._worksheet_by_gid(sh, self.WATCHLIST_GID)
+
+        row_idx, _, current_row = self._find_watchlist_row(ws, t.key)
+        if row_idx is None:
+            raise WatchlistNotFoundError(f"{t.key} not found on the watchlist")
+
+        ws.delete_rows(row_idx)
+        self._log_audit("watchlist_delete", t.key, current_row, None)
+
+    def _log_audit(self, action: str, ticker: str, before, after) -> None:
+        from app.core.logger import get_logger
+
+        get_logger().info(
+            "GSHEET_AUDIT action=%s ticker=%s before=%s after=%s",
+            action,
+            ticker,
+            before,
+            after,
+        )
+
+
+def _format_tags(tags: list[str] | None) -> str:
+    if not tags:
+        return ""
+    cleaned = [t.strip().title() for t in tags if t and t.strip()]
+    return " + ".join(cleaned)
 
 
 def _ticker_fields(t: TickerInfo) -> dict:

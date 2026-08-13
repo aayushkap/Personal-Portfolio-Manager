@@ -117,7 +117,7 @@ class WatchlistModule(BaseModule):
             "exchange": item.get("exchange") or meta.get("exchange"),
             "sector": item.get("sector") or meta.get("sector"),
             "logo_url": meta.get("logo_url"),
-            "notes": item.get("notes"),
+            "note": item.get("note"),
             "criteria": item.get("criteria"),  # passes through for UI
             "tags": tags,
             "current_price": _safe(current_price),

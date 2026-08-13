@@ -6,7 +6,7 @@
       "type": "debugpy",
       "request": "launch",
       "module": "uvicorn",
-      "args": ["app.api.__init__:app", "--reload"],
+      "args": ["app.api.__init__:app", "--reload", "--port", "8080"],
       "jinja": true
     }
   ]

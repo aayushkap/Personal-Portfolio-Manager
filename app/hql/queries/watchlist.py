@@ -43,7 +43,7 @@ class WatchlistQuery:
         Parameters
         ----------
         items : list[dict]
-            Raw items, typically containing at least 'ticker', 'notes', and 'criteria'.
+            Raw items, typically containing at least 'ticker', 'note', and 'criteria'.
         on : date, optional
             Reference date for calculating 'ago' metrics. Defaults to today.
 
@@ -139,7 +139,7 @@ class WatchlistQuery:
                     or (raw.get("overview") or {}).get("sector"),
                     "exchange": item.get("exchange")
                     or (raw.get("overview") or {}).get("exchange"),
-                    "notes": item.get("notes"),
+                    "note": item.get("note"),
                     "criteria": item.get("criteria"),
                     "current_price_aed": current_price,
                     "dod_pct": self._calculate_return(current_price, p1d),

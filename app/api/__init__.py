@@ -14,6 +14,7 @@ from app.api.holdings import router as holdings
 from app.api.watchlist import router as watchlist
 from app.api.metadata import router as metadata
 from app.api.quote import router as quote
+from app.api.system import router as system
 
 load_dotenv()
 
@@ -32,6 +33,7 @@ app.include_router(holdings)
 app.include_router(watchlist)
 app.include_router(metadata)
 app.include_router(quote)
+app.include_router(system)
 
 app.add_middleware(
     CORSMiddleware,

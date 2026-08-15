@@ -24,6 +24,7 @@ from app.services.analytics import AnalyticsModule
 from app.services.correlation import CorrelationModule
 from app.services.holdings import HoldingsModule
 from app.services.watchlist import WatchlistModule
+from app.services.system import SystemModule
 
 
 @lru_cache(maxsize=1)
@@ -60,3 +61,8 @@ def get_holdings_module() -> HoldingsModule:
 @lru_cache(maxsize=1)
 def get_watchlist_module() -> WatchlistModule:
     return WatchlistModule(cache=get_cache(), db=get_db())
+
+
+@lru_cache(maxsize=1)
+def get_system_module() -> SystemModule:
+    return SystemModule()

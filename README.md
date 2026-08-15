@@ -18,4 +18,4 @@ Summed across all sectors/exchanges i, and verified: Allocation + Selection + In
 
 6. Contribution to risk vs. contribution to return — for each position, compute its % contribution to total portfolio variance (using the correlation matrix + weights) versus its % contribution to total return. Plot both as a bar pair per position. This surfaces positions that are "carrying more risk than they're paying you for" — a genuinely institutional-grade insight retail dashboards almost never show. Can also account for volatility.
 
-7. Per Position Analytics
+7. Per Position Analytics ( Sold & Active )

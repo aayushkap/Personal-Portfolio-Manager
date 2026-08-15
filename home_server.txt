@@ -1,0 +1,35 @@
+-SSH In
+
+ssh akap@192.168.0.145
+
+-CI/CD — Push Code and Deploy
+
+rsync -avz \
+  --exclude='.git' \
+  --exclude='venv' \
+  --exclude='analytics_output.json' \
+  --exclude='cache' \
+  --exclude='*.pyc' \
+  ./ \
+  akap@192.168.0.145:~/app
+
+ssh akap@192.168.0.145 \
+  'cd ~/app && chmod +x cicd.sh && ./cicd.sh'
+
+ssh akap@192.168.0.145 \
+  'tail -f ~/app/uvicorn.log'
+
+- Backfill
+
+ssh akap@192.168.0.145 \
+  'cd ~/app && source venv/bin/activate && python -m app.scraper.backfill_ohlc'
+
+- Copy DB to Local
+
+rsync -av \
+  akap@192.168.0.145:~/app/cache/ \
+  ./cache/
+
+- Home Deployment
+
+http://192.168.0.145:8000/docs

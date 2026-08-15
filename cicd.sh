@@ -2,7 +2,7 @@
 
 set -e
 
-APP_DIR="/home/ubuntu/app"
+APP_DIR="/home/akap/app"
 VENV_DIR="$APP_DIR/venv"
 LOG_FILE="$APP_DIR/uvicorn.log"
 
@@ -12,20 +12,20 @@ echo "[INFO] Starting CI/CD restart..."
 
 # --- Kill existing Python processes (graceful -> force) ---
 echo "[INFO] Stopping existing Python processes..."
-pkill -15 -u ubuntu -f "uvicorn" || true
+pkill -15 -u akap -f "uvicorn" || true
 sleep 2
 
-if pgrep -u ubuntu -f "uvicorn" > /dev/null; then
+if pgrep -u akap -f "uvicorn" > /dev/null; then
     echo "[WARN] Force killing remaining uvicorn processes..."
-    pkill -9 -u ubuntu -f "uvicorn" || true
+    pkill -9 -u akap -f "uvicorn" || true
 fi
 
 # Ensure all are dead
 TRIES=0
-while pgrep -u ubuntu -f "uvicorn" > /dev/null; do
+while pgrep -u akap -f "uvicorn" > /dev/null; do
     if [ $TRIES -ge 5 ]; then
         echo "[ERROR] Some processes refused to terminate:"
-        pgrep -u ubuntu -af uvicorn
+        pgrep -u akap -af uvicorn
         exit 1
     fi
     sleep 1

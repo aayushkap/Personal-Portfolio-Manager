@@ -1,7 +1,6 @@
 # app/services/system.py
 """
 SystemModule
-------------
 Reads live host machine metrics (CPU, RAM, disk, battery/power, network,
 temperature, top processes) for the "Data Center" system health dashboard.
 
@@ -55,7 +54,7 @@ class SystemModule:
             "top_processes": self._get_top_processes(limit=8),
         }
 
-    # ---- host ----
+    # host
     def _get_host_info(self, boot_time: datetime, uptime_seconds: float) -> dict:
         try:
             load1, load5, load15 = psutil.getloadavg()
@@ -73,7 +72,7 @@ class SystemModule:
             "users_logged_in": len({u.name for u in psutil.users()}),
         }
 
-    # ---- cpu ----
+    # cpu
     def _get_cpu(self) -> dict:
         freq = psutil.cpu_freq()
         return {
@@ -90,7 +89,7 @@ class SystemModule:
             },
         }
 
-    # ---- memory ----
+    # memory
     def _get_memory(self) -> dict:
         mem = psutil.virtual_memory()
         return {
@@ -109,7 +108,7 @@ class SystemModule:
             "percent_used": swap.percent,
         }
 
-    # ---- disks ----
+    # disks
     def _get_disks(self) -> list[dict]:
         disks = []
         for part in psutil.disk_partitions(all=False):
@@ -141,7 +140,7 @@ class SystemModule:
             "write_count": io.write_count,
         }
 
-    # ---- network ----
+    # network
     def _get_network(self) -> dict:
         io = psutil.net_io_counters()
         stats = psutil.net_if_stats()
@@ -156,7 +155,7 @@ class SystemModule:
             "active_interfaces": active_interfaces,
         }
 
-    # ---- power / battery ----
+    # power / battery
     def _get_power(self) -> dict:
         batt = psutil.sensors_battery()
         if batt is None:
@@ -190,7 +189,7 @@ class SystemModule:
             return "low"
         return "normal"
 
-    # ---- temperatures ----
+    # temperatures
     def _get_temperatures(self) -> list[dict]:
         try:
             temps = psutil.sensors_temperatures()
@@ -211,7 +210,7 @@ class SystemModule:
                 )
         return readings
 
-    # ---- processes ----
+    # processes
     def _get_top_processes(self, limit: int = 8) -> list[dict]:
         procs = []
         for p in psutil.process_iter(["pid", "name", "username", "memory_percent"]):

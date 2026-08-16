@@ -5,7 +5,7 @@ from app.data.db import DB
 from app.data.gsheet import GSheet_Manager
 from app.scraper.ohlc import _set_ohlc
 
-MIN_ROWS = 5_000
+MIN_ROWS = 10_000
 
 
 def _required_instruments() -> dict[str, tuple[str, str]]:

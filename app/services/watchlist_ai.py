@@ -26,7 +26,7 @@ All criteria, critical & good to have: (For the critical criteria, all must be m
 {criteria}
 
 Current data (from internal systems):
-- Price: {price}. Note that this price is always in AED. If the criteria is in another currency, convert it to AED. 1 USD ~ 3.67 AED, 1 GBP ~ 4.5 AED, 1 EUR ~ 4.0 AED.
+- Price: {price}. Currency is the same as the exchange the stock is listed on (e.g. USD for NYSE & NASDAQ, GBP / GBX for LSE, AED for DFM & ADX, etc.).
 - Fundamentals: {fundamentals}.
 
 Today: {today}

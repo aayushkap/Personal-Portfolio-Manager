@@ -1,78 +1,70 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-set -e
+# Deploy through systemd. Do not use nohup or broad process-name kills: systemd
+# owns the API and worker cgroups and terminates their complete process trees.
+set -euo pipefail
 
 APP_DIR="/home/akap/app"
 VENV_DIR="$APP_DIR/venv"
-LOG_FILE="$APP_DIR/uvicorn.log"
+APP_USER="akap"
+SYSTEMCTL=(sudo systemctl)
+if [[ "${PBE_SYSTEMCTL_NO_SUDO:-0}" == "1" ]]; then
+    SYSTEMCTL=(systemctl)
+fi
 
 cd "$APP_DIR"
 
-echo "[INFO] Starting CI/CD restart..."
-
-# --- Kill existing Python processes (graceful -> force) ---
-echo "[INFO] Stopping existing Python processes..."
-pkill -15 -u akap -f "uvicorn" || true
-sleep 2
-
-if pgrep -u akap -f "uvicorn" > /dev/null; then
-    echo "[WARN] Force killing remaining uvicorn processes..."
-    pkill -9 -u akap -f "uvicorn" || true
+if [[ ! -x "$VENV_DIR/bin/python" ]]; then
+    echo "[ERROR] Python virtual environment not found at $VENV_DIR" >&2
+    exit 1
 fi
 
-# Ensure all are dead
-TRIES=0
-while pgrep -u akap -f "uvicorn" > /dev/null; do
-    if [ $TRIES -ge 5 ]; then
-        echo "[ERROR] Some processes refused to terminate:"
-        pgrep -u akap -af uvicorn
-        exit 1
-    fi
-    sleep 1
-    ((TRIES++))
+if ! "${SYSTEMCTL[@]}" cat pbe-api.service pbe-worker.service >/dev/null; then
+    echo "[ERROR] systemd units are not installed. Run sudo deploy/install-systemd.sh first." >&2
+    exit 1
+fi
+
+echo "[INFO] Stopping managed API and worker services..."
+"${SYSTEMCTL[@]}" stop pbe-api.service pbe-worker.service || true
+
+# One-time migration protection: clean up only legacy processes belonging to
+# this application. Future starts are fully contained by systemd cgroups.
+legacy_patterns=(
+    "gunicorn.*app\.api:app"
+    "uvicorn.*app\.api:app"
+    "python.*app\.worker"
+)
+
+for pattern in "${legacy_patterns[@]}"; do
+    pkill -TERM -u "$APP_USER" -f "$pattern" 2>/dev/null || true
 done
 
-echo "[INFO] All uvicorn processes stopped."
+for _ in {1..10}; do
+    any_legacy=0
+    for pattern in "${legacy_patterns[@]}"; do
+        if pgrep -u "$APP_USER" -f "$pattern" >/dev/null; then
+            any_legacy=1
+            break
+        fi
+    done
+    [[ $any_legacy -eq 0 ]] && break
+    sleep 1
+done
 
-# --- Rotate existing log ---
-if [ -f "$LOG_FILE" ]; then
-    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-    mv "$LOG_FILE" "${LOG_FILE}.${TIMESTAMP}"
-    echo "[INFO] Archived previous log to ${LOG_FILE}.${TIMESTAMP}"
-fi
+for pattern in "${legacy_patterns[@]}"; do
+    pkill -KILL -u "$APP_USER" -f "$pattern" 2>/dev/null || true
+done
 
-# --- Activate virtual environment ---
-echo "[INFO] Activating virtual environment..."
+echo "[INFO] Preparing SQLite schema and WAL mode..."
+"$VENV_DIR/bin/python" -m app.data.bootstrap
 
-if [ ! -d "$VENV_DIR" ]; then
-    echo "[ERROR] venv not found at $VENV_DIR"
-    exit 1
-fi
+echo "[INFO] Starting exactly one worker and the two-worker API..."
+"${SYSTEMCTL[@]}" start pbe-worker.service
+"${SYSTEMCTL[@]}" start pbe-api.service
 
-source "$VENV_DIR/bin/activate"
-
-# Verify activation
-if ! which python | grep -q "$VENV_DIR"; then
-    echo "[ERROR] Failed to activate virtual environment"
-    exit 1
-fi
-
-echo "[INFO] Virtual environment activated."
-
-# --- Start app with nohup ---
-echo "[INFO] Starting Uvicorn (detached)..."
-
-nohup "$VENV_DIR/bin/python" -m uvicorn app.api:app \
-    --host 0.0.0.0 \
-    --port 8000 \
-    > "$LOG_FILE" 2>&1 &
-
-disown
-
-sleep 1
+sleep 2
+"${SYSTEMCTL[@]}" is-active --quiet pbe-worker.service
+"${SYSTEMCTL[@]}" is-active --quiet pbe-api.service
 
 echo "[INFO] Deployment complete."
-echo "[INFO] Current log: $LOG_FILE"
-echo "[INFO] Archived logs: ${LOG_FILE}.*"
-echo "[INFO] Running processes:"
-pgrep -af uvicorn
+"${SYSTEMCTL[@]}" --no-pager --full status pbe-api.service pbe-worker.service

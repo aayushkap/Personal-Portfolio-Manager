@@ -10,7 +10,7 @@ router = APIRouter(prefix="/analytics", tags=["Analytics"])
 
 
 @router.post("/pnl")
-async def get_pnl(
+def get_pnl(
     mode: Literal["price_return", "total"] = "total",
     module: AnalyticsModule = Depends(get_analytics_module),
 ):
@@ -18,7 +18,7 @@ async def get_pnl(
 
 
 @router.post("/allocation")
-async def get_allocation(
+def get_allocation(
     by: Literal["position", "sector", "exchange"] = "position",
     module: AnalyticsModule = Depends(get_analytics_module),
 ):
@@ -26,21 +26,21 @@ async def get_allocation(
 
 
 @router.post("/income")
-async def get_income(
+def get_income(
     module: AnalyticsModule = Depends(get_analytics_module),
 ):
     return module.get_income()
 
 
 @router.get("/indexes")
-async def get_indexes(
+def get_indexes(
     module: AnalyticsModule = Depends(get_analytics_module),
 ):
     return module.get_indexes()
 
 
 @router.post("/performance")
-async def get_performance(
+def get_performance(
     body: AnalyticsPerformanceRequest,
     module: AnalyticsModule = Depends(get_analytics_module),
 ):

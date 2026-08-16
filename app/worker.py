@@ -1,11 +1,14 @@
 # app/worker.py
 
-import time
 import asyncio
+import signal
+import time
 from collections import defaultdict
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import app.config  # noqa
 
+from app.config import WORKER_LOCK_PATH
+from app.core.singleton import SingletonLock
 from app.utils.time_utils import DUBAI_TZ, dubai_now
 from app.core.logger import get_logger
 from app.scraper.ohlc import _set_ohlc
@@ -276,7 +279,7 @@ async def fundamentals_drip_job() -> str:
                 logger.info("No tickers found in sheets — nothing to scrape.")
                 return "idle"
 
-            cache = Cache()
+            cache = Cache(read_only=False)
 
             missing_tickers: list[str] = []
             updated_tickers: list[str] = []
@@ -418,7 +421,16 @@ def run_holdings_news_check():
 # Job Runner — single continuous loop, the ONLY place OHLC + drip are called
 
 
-async def job_runner():
+async def _sleep_or_stop(stop_event: asyncio.Event, seconds: float) -> bool:
+    """Sleep until the next cycle, unless shutdown is requested first."""
+    try:
+        await asyncio.wait_for(stop_event.wait(), timeout=seconds)
+        return True
+    except asyncio.TimeoutError:
+        return False
+
+
+async def job_runner(stop_event: asyncio.Event):
     """
     Serial orchestrator for heavy jobs only.
 
@@ -431,7 +443,7 @@ async def job_runner():
     """
     logger.info("Job runner started")
 
-    while True:
+    while not stop_event.is_set():
         try:
             cycle_start = dubai_now()
             weekday = cycle_start.weekday()  # 0=Mon ... 6=Sun
@@ -455,7 +467,8 @@ async def job_runner():
                     elapsed,
                     sleep_for,
                 )
-                await asyncio.sleep(sleep_for)
+                if await _sleep_or_stop(stop_event, sleep_for):
+                    break
 
             else:
                 logger.info("Job runner: off-hours — checking fundamentals work")
@@ -474,18 +487,39 @@ async def job_runner():
                     drip_status,
                     sleep_for,
                 )
-                await asyncio.sleep(sleep_for)
+                if await _sleep_or_stop(stop_event, sleep_for):
+                    break
 
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("Job runner error — resuming in 60s")
-            await asyncio.sleep(60)
+            if await _sleep_or_stop(stop_event, 60):
+                break
 
 
 # Entry point
 
 
 async def main():
+    lock = SingletonLock(WORKER_LOCK_PATH)
+    lock.acquire()
+
     scheduler = AsyncIOScheduler(timezone=DUBAI_TZ)
+    stop_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    def request_stop() -> None:
+        logger.info("Worker shutdown requested")
+        stop_event.set()
+
+    for shutdown_signal in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(shutdown_signal, request_stop)
+        except NotImplementedError:
+            # The production service runs on Linux. This keeps direct local
+            # execution usable on platforms without asyncio signal handlers.
+            pass
 
     # Lightweight cron jobs — these never touch Playwright
     scheduler.add_job(
@@ -532,7 +566,7 @@ async def main():
 
     # Start the heavy job runner as a background task.
     # OHLC and fundamentals scraping are managed solely here.
-    asyncio.create_task(job_runner())
+    runner_task = asyncio.create_task(job_runner(stop_event), name="job-runner")
 
     # Manual one-shot triggers:
     # await ohlc_job(bars=100)
@@ -543,10 +577,12 @@ async def main():
     # run_holdings_news_check()
 
     try:
-        while True:
-            await asyncio.sleep(60)
-    except (KeyboardInterrupt, SystemExit):
-        scheduler.shutdown()
+        await stop_event.wait()
+    finally:
+        scheduler.shutdown(wait=False)
+        runner_task.cancel()
+        await asyncio.gather(runner_task, return_exceptions=True)
+        lock.release()
         logger.info("Worker stopped.")
 
 

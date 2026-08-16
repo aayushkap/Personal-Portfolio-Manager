@@ -1,0 +1,22 @@
+[Unit]
+Description=Portfolio Backend API (Gunicorn)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=akap
+Group=akap
+WorkingDirectory=/home/akap/app
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/akap/app/venv/bin/gunicorn app.api:app --bind 0.0.0.0:8000 --workers 2 --worker-class uvicorn_worker.UvicornWorker --timeout 60 --graceful-timeout 90 --keep-alive 5 --max-requests 2000 --max-requests-jitter 200 --access-logfile - --error-logfile -
+Restart=always
+RestartSec=5
+KillMode=control-group
+TimeoutStopSec=120
+SendSIGKILL=yes
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

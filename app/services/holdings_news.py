@@ -10,6 +10,7 @@ from google.genai import types
 
 from app.core.logger import get_logger
 from app.config import CACHE_DIR, GEMINI_KEY
+from app.data.files import atomic_write_json
 
 from app.hql import HQL
 
@@ -347,6 +348,5 @@ class HoldingsNewsAgent:
             return None
 
     def _persist(self, store: dict) -> None:
-        CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        NEWS_PATH.write_text(json.dumps(store, indent=2), encoding="utf-8")
+        atomic_write_json(NEWS_PATH, store)
         logger.info("Persisted news for %d ticker(s)", len(store["tickers"]))

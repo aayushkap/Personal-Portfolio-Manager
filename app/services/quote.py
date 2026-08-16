@@ -2,7 +2,8 @@ import json
 import random
 from google import genai
 from google.genai import types
-from app.config import QUOTE_PATH, CACHE_DIR, GEMINI_KEY
+from app.config import QUOTE_PATH, GEMINI_KEY
+from app.data.files import atomic_write_json
 
 _LENSES = [
     # --- Street / Hustle ---
@@ -245,8 +246,7 @@ class QuoteStore:
             ),
         )
         data = json.loads(response.text)
-        CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        QUOTE_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        atomic_write_json(QUOTE_PATH, data)
         return data
 
     @staticmethod

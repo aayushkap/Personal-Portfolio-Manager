@@ -8,6 +8,7 @@ from google import genai
 from google.genai import types
 from app.core.logger import get_logger
 from app.config import CACHE_DIR, GEMINI_KEY
+from app.data.files import atomic_write_json
 
 logger = get_logger()
 
@@ -199,10 +200,9 @@ class WatchlistAIScreener:
             return None
 
     def _persist(self, alerts: list[dict]) -> None:
-        CACHE_DIR.mkdir(parents=True, exist_ok=True)
         payload = {
             "generated_at": datetime.utcnow().isoformat() + "Z",
             "alerts": alerts,
         }
-        ALERTS_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        atomic_write_json(ALERTS_PATH, payload)
         logger.info("Persisted %d alerts", len(alerts))

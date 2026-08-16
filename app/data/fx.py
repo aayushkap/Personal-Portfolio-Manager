@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from app.config import CACHE_DIR
 from app.core.logger import get_logger
+from app.data.files import atomic_write_json
 
 logger = get_logger()
 FX_FILE = Path(CACHE_DIR) / "exchange.json"
@@ -42,9 +43,7 @@ async def fetch_and_save_fx() -> dict[str, float]:
             if base == "GBP":
                 rates["GBX"] = row["close"] / 100
 
-    FX_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(FX_FILE, "w") as f:
-        json.dump(rates, f)
+    atomic_write_json(FX_FILE, rates)
 
     logger.info("FX rates saved: %s", rates)
     return rates

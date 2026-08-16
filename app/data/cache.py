@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.logger import get_logger
+from app.data.files import atomic_write_json
 from app.utils.time_utils import dubai_now_iso
 from app.config import CACHE_DIR
 
@@ -19,9 +20,13 @@ class Cache:
     - overwrite on save
     """
 
-    def __init__(self, cache_dir: str | Path = CACHE_DIR) -> None:
+    def __init__(
+        self, cache_dir: str | Path = CACHE_DIR, *, read_only: bool = True
+    ) -> None:
         self.cache_dir = Path(cache_dir)
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.read_only = read_only
+        if not read_only:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     def _safe_ticker(self, ticker_key: str) -> str:
         return ticker_key.replace(":", "_").lower()
@@ -45,6 +50,9 @@ class Cache:
         )
 
     def save(self, ticker_key: str, data: dict[str, Any]) -> bool:
+        if self.read_only:
+            logger.error("Refusing to write ticker cache from a read-only Cache")
+            return False
         if self._has_error(data):
             logger.warning("Cache skip %s: payload contains error", ticker_key)
             return False
@@ -55,8 +63,7 @@ class Cache:
         path = self._path(ticker_key)
 
         try:
-            with path.open("w", encoding="utf-8") as f:
-                json.dump(payload, f, indent=2, ensure_ascii=False)
+            atomic_write_json(path, payload)
 
             logger.info("Cached %s -> %s", ticker_key, path)
             return True
@@ -79,6 +86,9 @@ class Cache:
             return None
 
     def delete(self, ticker_key: str) -> bool:
+        if self.read_only:
+            logger.error("Refusing to delete ticker cache from a read-only Cache")
+            return False
         path = self._path(ticker_key)
 
         if not path.exists():

@@ -16,7 +16,7 @@ class CorrelationRequest(BaseModel):
 
 
 @router.post("")
-async def get_correlation(
+def get_correlation(
     body: CorrelationRequest,
     module: CorrelationModule = Depends(get_correlation_module),
 ):

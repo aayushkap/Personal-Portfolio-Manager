@@ -10,6 +10,7 @@ __pycache__/
 /*.csv
 
 cache/
+.run/
 commands_hs.txt
 
 # Distribution / packaging

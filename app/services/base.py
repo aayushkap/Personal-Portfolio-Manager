@@ -35,7 +35,7 @@ class BaseModule:
         self._cache = cache
         self._db = db
         self._fx: dict[str, float] | None = None
-        self.hql = HQL()
+        self.hql = HQL(cache=self._cache, db=self._db)
 
     @property
     def fx(self) -> dict[str, float]:

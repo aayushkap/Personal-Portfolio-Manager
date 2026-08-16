@@ -21,9 +21,11 @@ class HQL:
         hql.portfolio()
     """
 
-    def __init__(self) -> None:
-        self._cache = Cache()
-        self._db = DB()
+    def __init__(self, cache: Cache | None = None, db: DB | None = None) -> None:
+        # Keep the HQL query layer identical while allowing API services to pass
+        # their read-only dependencies through the facade.
+        self._cache = cache or Cache()
+        self._db = db or DB()
 
         self.fx = FXService()
         self.cache_repo = CacheRepository(self._cache)

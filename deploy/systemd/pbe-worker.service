@@ -1,0 +1,22 @@
+[Unit]
+Description=Portfolio Backend Scheduled Worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=akap
+Group=akap
+WorkingDirectory=/home/akap/app
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/akap/app/venv/bin/python -m app.worker
+Restart=always
+RestartSec=5
+KillMode=control-group
+TimeoutStopSec=540
+SendSIGKILL=yes
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

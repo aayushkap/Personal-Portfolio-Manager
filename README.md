@@ -4,10 +4,8 @@ This repository contains the backend for a personal portfolio and market-data
 application. It serves portfolio analytics through a FastAPI API and keeps the
 underlying market data fresh through a separate scheduled worker.
 
-This document describes the intended production architecture after the Gunicorn
-and worker-separation changes are complete. Until that migration is implemented,
-some of the current startup scripts and application lifecycle code will still
-behave differently.
+This document describes the local and production architecture. Local development
+uses the tracked process supervisor; production uses the tracked systemd units.
 
 ## What the application does
 
@@ -123,7 +121,8 @@ filesystem.
 
 ## Application startup, end to end
 
-Production startup happens in this order.
+Production startup happens in this order. The database bootstrap runs during a
+deployment, not automatically whenever a worker is restarted after a failure.
 
 ### 1. Deploy and prepare the environment
 
@@ -385,10 +384,41 @@ data.
 
 ## Service management and deployment
 
+### Local development
+
+Use the root start script locally. It starts two Gunicorn API workers on port
+8080 plus one scheduled worker, each in a separate process group:
+
+```bash
+./start.sh start
+./start.sh status
+./start.sh restart
+./start.sh stop
+```
+
+`stop` and `restart` terminate the process groups, including Gunicorn workers
+and browser processes created by Playwright. Local logs are written to
+`.run/api.log` and `.run/worker.log`. Set `PBE_BIND` to use a different bind
+address, for example `PBE_BIND=127.0.0.1:8081 ./start.sh start`.
+
+### Production
+
 Production should use two systemd units:
 
 - `pbe-api.service` for Gunicorn.
 - `pbe-worker.service` for `python -m app.worker`.
+
+On the production server, install the tracked units once after deploying this
+repository:
+
+```bash
+sudo ./deploy/install-systemd.sh
+```
+
+After that, `./cicd.sh` performs the safe deployment sequence. For direct
+production service control, use `PBE_MODE=systemd ./start.sh
+{start|stop|restart|status}`. systemd owns each service's complete process
+group, including Gunicorn workers and worker-owned browser processes.
 
 The service manager provides process ownership, environment loading, log
 collection, automatic restart, signal delivery, and a reliable process ID.

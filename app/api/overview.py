@@ -9,7 +9,7 @@ router = APIRouter(prefix="/overview", tags=["Overview"])
 
 
 @router.post("")
-async def get_overview(
+def get_overview(
     body: PerformanceRequest,
     module: OverviewModule = Depends(get_overview_module),
 ):

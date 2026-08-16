@@ -9,10 +9,9 @@ ACCESS_DIR = BASE_DIR / "access"
 CACHE_DIR = BASE_DIR / "cache"
 DB_PATH = CACHE_DIR / "portfolio.db"
 QUOTE_PATH = CACHE_DIR / "quote.json"
+WORKER_LOCK_PATH = CACHE_DIR / "pbe-worker.lock"
 
 GEMINI_KEY = os.getenv("GEMINI_KEY")
-
-CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 # All times are Asia/Dubai.  The worker applies this buffer on both sides of a
 # session when deciding whether an instrument needs an intraday OHLC refresh.

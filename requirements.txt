@@ -54,6 +54,8 @@ typing_extensions
 tzlocal
 urllib3
 uvicorn
+gunicorn
+uvicorn-worker
 websocket-client
 websockets
 yf

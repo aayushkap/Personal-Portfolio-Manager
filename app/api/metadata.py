@@ -10,7 +10,7 @@ router = APIRouter(prefix="/metadata", tags=["Metadata"])
 
 
 @router.get("")
-async def get_metadata(module: OverviewModule = Depends(get_overview_module)):
+def get_metadata(module: OverviewModule = Depends(get_overview_module)):
     tx = module.get_all_transactions()
 
     # Fetch watchlist separately since they might not be in transactions yet

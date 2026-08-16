@@ -35,7 +35,7 @@ def _required_instruments() -> dict[str, tuple[str, str]]:
 
 def _remove_stale_ohlc(db: DB, required_symbols: set[str]) -> list[str]:
     """Delete price rows for instruments no longer in sheets or overlays."""
-    with db._connect() as conn:
+    with db.connection(write=True) as conn:
         cached_symbols = {
             row["symbol"] for row in conn.execute("SELECT DISTINCT symbol FROM ohlc")
         }
@@ -49,19 +49,20 @@ def _remove_stale_ohlc(db: DB, required_symbols: set[str]) -> list[str]:
     # DELETE releases rows for reuse, while VACUUM returns their disk space in
     # cache/portfolio.db to the filesystem.
     if stale_symbols:
-        with db._connect() as conn:
+        with db.connection(write=True) as conn:
             conn.execute("VACUUM")
 
     return stale_symbols
 
 
 async def main():
-    db = DB()
+    DB.bootstrap()
+    db = DB(read_only=False)
     required = _required_instruments()
     stale = _remove_stale_ohlc(db, set(required))
     print(f"Removed {len(stale)} stale symbols")
 
-    with db._connect() as conn:
+    with db.connection() as conn:
         row_counts = dict(
             conn.execute("SELECT symbol, COUNT(*) FROM ohlc GROUP BY symbol")
         )

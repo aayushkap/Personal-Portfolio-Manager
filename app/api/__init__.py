@@ -2,10 +2,7 @@
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import asyncio
-from contextlib import asynccontextmanager
 
-from app.worker import main as worker_main
 from dotenv import load_dotenv
 from app.api.overview import router as overview
 from app.api.analytics import router as analytics
@@ -19,13 +16,7 @@ from app.api.system import router as system
 load_dotenv()
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    asyncio.create_task(worker_main())
-    yield
-
-
-app = FastAPI(title="HSFW BE", lifespan=lifespan)
+app = FastAPI(title="HSFW BE")
 app.include_router(overview)
 app.include_router(analytics)
 app.include_router(correlation)

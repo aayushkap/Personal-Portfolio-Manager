@@ -7,5 +7,5 @@ router = APIRouter(prefix="/quote", tags=["Quote"])
 
 
 @router.post("/")
-async def get_quote():
+def get_quote():
     return QuoteStore.read()

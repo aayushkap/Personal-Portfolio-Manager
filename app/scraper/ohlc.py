@@ -51,7 +51,7 @@ async def _set_ohlc(
                     lambda ts: ts.isoformat() if pd.notna(ts) else None
                 )
 
-                DB().upsert_many(
+                DB(read_only=False).upsert_many(
                     [
                         {
                             "symbol": storage_key,

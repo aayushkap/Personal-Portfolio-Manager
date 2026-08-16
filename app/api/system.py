@@ -8,7 +8,7 @@ router = APIRouter(prefix="/system", tags=["System"])
 
 
 @router.post("/health")
-async def get_health(
+def get_health(
     module: SystemModule = Depends(get_system_module),
 ):
     return module.get_health()

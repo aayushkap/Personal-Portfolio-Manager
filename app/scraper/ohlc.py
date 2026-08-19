@@ -36,16 +36,13 @@ async def _set_ohlc(
             if df is not None and not df.empty:
                 df = df.reset_index().rename(columns={"index": "datetime"})
 
-                # TvDatafeed returns UTC — localize as UTC then convert to Dubai
-                dt = pd.to_datetime(df["datetime"], errors="coerce")
-
-                # If it's a naive datetime (it is), just tag it as Dubai time directly.
-                if dt.dt.tz is None:
-                    dt = dt.dt.tz_localize(
-                        "Asia/Dubai", ambiguous="NaT", nonexistent="NaT"
-                    )
-                else:
-                    dt = dt.dt.tz_convert("Asia/Dubai")
+                # TvDatafeed timestamps are UTC.  Naive values must first be
+                # interpreted as UTC, then converted to the storage timezone;
+                # localizing them directly to Dubai shifts every bar four hours
+                # earlier than its actual market time.
+                dt = pd.to_datetime(
+                    df["datetime"], errors="coerce", utc=True
+                ).dt.tz_convert("Asia/Dubai")
 
                 df["datetime"] = dt.apply(
                     lambda ts: ts.isoformat() if pd.notna(ts) else None

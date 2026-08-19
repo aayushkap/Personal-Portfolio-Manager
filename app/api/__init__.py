@@ -1,6 +1,8 @@
 # app/api/__init_.py
 
-from fastapi import FastAPI
+import time
+
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from dotenv import load_dotenv
@@ -12,9 +14,11 @@ from app.api.watchlist import router as watchlist
 from app.api.metadata import router as metadata
 from app.api.quote import router as quote
 from app.api.system import router as system
+from app.core.logger import get_logger
 
 load_dotenv()
 
+logger = get_logger()
 
 app = FastAPI(title="HSFW BE")
 app.include_router(overview)
@@ -33,6 +37,25 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def log_request(request: Request, call_next):
+    """Record every completed API request in the live API log."""
+    started_at = time.perf_counter()
+    status_code = 500
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+        return response
+    finally:
+        logger.info(
+            "API request | method=%s path=%s status=%d elapsed_ms=%.1f",
+            request.method,
+            request.url.path,
+            status_code,
+            (time.perf_counter() - started_at) * 1000,
+        )
 
 
 @app.get("/")

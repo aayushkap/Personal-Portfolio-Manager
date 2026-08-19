@@ -9,6 +9,8 @@ User=akap
 Group=akap
 WorkingDirectory=/home/akap/app
 Environment=PYTHONUNBUFFERED=1
+StandardOutput=append:/home/akap/app/app/logs/api.log
+StandardError=append:/home/akap/app/app/logs/api.log
 ExecStart=/home/akap/app/venv/bin/gunicorn app.api:app --bind 0.0.0.0:8000 --workers 2 --worker-class uvicorn_worker.UvicornWorker --timeout 60 --graceful-timeout 90 --keep-alive 5 --max-requests 2000 --max-requests-jitter 200 --access-logfile - --error-logfile -
 Restart=always
 RestartSec=5

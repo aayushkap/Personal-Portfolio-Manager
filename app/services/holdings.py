@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+import math
 from typing import Optional
 
 import pandas as pd
@@ -167,14 +168,55 @@ class HoldingsModule(BaseModule):
             "total_value": _safe(market_value),
             "total_return": _safe(total_return),
             "total_return_pct": _safe(_pct(market_value + cum_divs, cost_basis)),
-            "dod_pct": _safe(_pct(current_price, _price_ago(1))),
-            "mom_pct": _safe(_pct(current_price, _price_ago(30))),
-            "three_month_pct": _safe(_pct(current_price, _price_ago(90))),
+            "dod_pct": _safe(
+                self._pct_change_over_window(current_price, prices, ticker, today, 1)
+            ),
+            "mom_pct": _safe(
+                self._pct_change_over_window(current_price, prices, ticker, today, 30)
+            ),
+            "three_month_pct": _safe(
+                self._pct_change_over_window(current_price, prices, ticker, today, 90)
+            ),
             "cumulative_divs": round(cum_divs, 2),
             "yoc_pct": _safe(yoc),
             "earnings_nearby": _earnings_nearby(earnings_date, today),
             "sparkline": self._build_sparkline(ticker, prices, today),
         }
+
+    def _pct_change_over_window(
+        self,
+        current_price: float,
+        prices: pd.DataFrame,
+        ticker: str,
+        today: date,
+        days: int,
+    ) -> Optional[float]:
+        if ticker not in prices.columns:
+            return None
+        col = prices[ticker].dropna()
+        distinct = col.loc[
+            col.shift() != col
+        ]  # collapse ffilled duplicates to real prints
+        if distinct.empty:
+            return None
+
+        # Anchor "today": if current_price already matches the latest recorded close,
+        # we're in a pre-open login — step back one more distinct close before applying the window.
+        last_close = float(distinct.iloc[-1])
+        anchor_idx = len(distinct) - (
+            2 if math.isclose(current_price, last_close, rel_tol=1e-9) else 1
+        )
+        if anchor_idx < 0:
+            return None
+        anchor_date = distinct.index[anchor_idx]
+
+        target = pd.Timestamp(anchor_date.date() - timedelta(days=days))
+        past = distinct[distinct.index <= target]
+        if past.empty:
+            return None
+
+        old = float(past.iloc[-1])
+        return round((current_price - old) / old * 100, 2) if old else None
 
     # Detail builders
     def _build_chart(

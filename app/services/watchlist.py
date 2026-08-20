@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+import math
 from typing import Optional
 
 import pandas as pd
@@ -65,6 +66,40 @@ class WatchlistModule(BaseModule):
         # Inject persisted AI alerts — reads from disk, no LLM call here
         return WatchlistAIScreener().merge_alerts(rows)
 
+    def _pct_change_over_window(
+        self,
+        current_price: Optional[float],
+        col: Optional[pd.Series],
+        today: date,
+        days: int,
+    ) -> Optional[float]:
+        if col is None or col.empty or current_price is None:
+            return None
+
+        if col.index.tz is not None:
+            col = col.copy()
+            col.index = col.index.tz_localize(None)
+
+        distinct = col.dropna()
+        distinct = distinct.loc[distinct.shift() != distinct]
+        if distinct.empty:
+            return None
+
+        last_close = float(distinct.iloc[-1])
+        anchor_idx = len(distinct) - (
+            2 if math.isclose(current_price, last_close, rel_tol=1e-9) else 1
+        )
+        if anchor_idx < 0:
+            return None
+
+        target = pd.Timestamp(distinct.index[anchor_idx].date() - timedelta(days=days))
+        past = distinct[distinct.index <= target]
+        if past.empty:
+            return None
+
+        old = float(past.iloc[-1])
+        return round((current_price - old) / old * 100, 2) if old else None
+
     def _build_row(
         self, item: dict, prices: pd.DataFrame, today: date, currency_map: dict = {}
     ) -> Optional[dict]:
@@ -82,13 +117,6 @@ class WatchlistModule(BaseModule):
             cutoff = pd.Timestamp(today - timedelta(days=days), tz="Asia/Dubai")
             past = col[col.index <= cutoff]
             return float(past.iloc[-1]) if not past.empty else None
-
-        p1d = _ago(1)
-        p1w = _ago(7)
-        p1m = _ago(30)
-        p3m = _ago(90)
-        p6m = _ago(180)
-        p1y = _ago(365)
 
         meta = self._ticker_meta(ticker)
         # A watchlist can contain a ticker before it has been scraped into the
@@ -121,12 +149,24 @@ class WatchlistModule(BaseModule):
             "criteria": item.get("criteria"),  # passes through for UI
             "tags": tags,
             "current_price": _safe(current_price),
-            "dod_pct": _safe(_pct(current_price, p1d)),
-            "wow_pct": _safe(_pct(current_price, p1w)),
-            "mom_pct": _safe(_pct(current_price, p1m)),
-            "three_month_pct": _safe(_pct(current_price, p3m)),
-            "six_month_pct": _safe(_pct(current_price, p6m)),
-            "yoy_pct": _safe(_pct(current_price, p1y)),
+            "dod_pct": _safe(
+                self._pct_change_over_window(current_price, col, today, 1)
+            ),
+            "wow_pct": _safe(
+                self._pct_change_over_window(current_price, col, today, 7)
+            ),
+            "mom_pct": _safe(
+                self._pct_change_over_window(current_price, col, today, 30)
+            ),
+            "three_month_pct": _safe(
+                self._pct_change_over_window(current_price, col, today, 90)
+            ),
+            "six_month_pct": _safe(
+                self._pct_change_over_window(current_price, col, today, 180)
+            ),
+            "yoy_pct": _safe(
+                self._pct_change_over_window(current_price, col, today, 365)
+            ),
             "next_div_date": next_div_date,
             "div_yield": div_yield,
             "earnings_nearby": _earnings_nearby(earnings_date, today),

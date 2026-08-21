@@ -9,6 +9,8 @@ User=akap
 Group=akap
 WorkingDirectory=/home/akap/app
 Environment=PYTHONUNBUFFERED=1
+# A safeguard for normal growth; it is not a substitute for closing clients.
+LimitNOFILE=8192
 StandardOutput=append:/home/akap/app/app/logs/worker.log
 StandardError=append:/home/akap/app/app/logs/worker.log
 ExecStart=/home/akap/app/venv/bin/python -m app.worker

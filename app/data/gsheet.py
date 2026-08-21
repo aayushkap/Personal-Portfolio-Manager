@@ -3,6 +3,8 @@
 import gspread
 import os
 import re
+from contextlib import contextmanager
+from typing import Iterator
 
 from app.config import ACCESS_DIR
 from app.data.ticker import TickerInfo, parse_ticker
@@ -29,17 +31,28 @@ class GSheet_Manager:
     def __init__(self):
         pass
 
-    def _open_sheet(self):
+    @contextmanager
+    def _open_sheet(self) -> Iterator[object]:
+        """Open a sheet and always release gspread's underlying HTTP session.
+
+        ``gspread.service_account`` creates a new ``AuthorizedSession``.  The
+        worker creates this manager repeatedly, so leaving that session open
+        leaks its Google HTTPS sockets until the process reaches its file
+        descriptor limit.
+        """
         gc = gspread.service_account(filename=self.SERVICE_ACCOUNT_FILE)
-        return gc.open_by_key(self.SPREADSHEET_ID)
+        try:
+            yield gc.open_by_key(self.SPREADSHEET_ID)
+        finally:
+            gc.http_client.session.close()
 
     def fetch_transactions(self) -> list[dict]:
         try:
-            sh = self._open_sheet()
-            worksheet = sh.get_worksheet(0)
-            rows = worksheet.get_all_records()
-            formula_rows = worksheet.get_all_values(value_render_option="FORMULA")
-            return self.format_transactions(rows, formula_rows)
+            with self._open_sheet() as sh:
+                worksheet = sh.get_worksheet(0)
+                rows = worksheet.get_all_records()
+                formula_rows = worksheet.get_all_values(value_render_option="FORMULA")
+                return self.format_transactions(rows, formula_rows)
         except Exception:
             import traceback
 
@@ -48,14 +61,16 @@ class GSheet_Manager:
 
     def fetch_watchlist(self) -> list[dict]:
         try:
-            sh = self._open_sheet()
-            ws = self._worksheet_by_gid(sh, self.WATCHLIST_GID)
-            values = ws.get_all_values()
-            if not values:
-                return []
-            headers = [h for h in values[0] if h]
-            rows = [dict(zip(headers, row)) for row in values[1:] if row and row[0]]
-            return self._format_watchlist(rows)
+            with self._open_sheet() as sh:
+                ws = self._worksheet_by_gid(sh, self.WATCHLIST_GID)
+                values = ws.get_all_values()
+                if not values:
+                    return []
+                headers = [h for h in values[0] if h]
+                rows = [
+                    dict(zip(headers, row)) for row in values[1:] if row and row[0]
+                ]
+                return self._format_watchlist(rows)
         except Exception:
             import traceback
 
@@ -155,51 +170,55 @@ class GSheet_Manager:
         if not t:
             raise ValueError(f"Invalid ticker: {ticker}")
 
-        sh = self._open_sheet()
-        ws = self._worksheet_by_gid(sh, self.WATCHLIST_GID)
+        with self._open_sheet() as sh:
+            ws = self._worksheet_by_gid(sh, self.WATCHLIST_GID)
 
-        row_idx, headers, current_row = self._find_watchlist_row(ws, t.key)
+            row_idx, headers, current_row = self._find_watchlist_row(ws, t.key)
 
-        if row_idx is None:
-            # Create: fresh row, blank for anything not supplied
-            instrument_str = f"{t.tv_exchange}:{t.tv_symbol}"
-            row = [""] * len(headers)
-            row[headers.index("Instrument")] = instrument_str
-            if "Note" in headers:
-                row[headers.index("Note")] = note or ""
-            if "Criteria" in headers:
-                row[headers.index("Criteria")] = criteria or ""
-            if "Tags" in headers:
-                row[headers.index("Tags")] = _format_tags(tags)
+            if row_idx is None:
+                # Create: fresh row, blank for anything not supplied
+                instrument_str = f"{t.tv_exchange}:{t.tv_symbol}"
+                row = [""] * len(headers)
+                row[headers.index("Instrument")] = instrument_str
+                if "Note" in headers:
+                    row[headers.index("Note")] = note or ""
+                if "Criteria" in headers:
+                    row[headers.index("Criteria")] = criteria or ""
+                if "Tags" in headers:
+                    row[headers.index("Tags")] = _format_tags(tags)
 
-            ws.append_row(row, value_input_option="USER_ENTERED")
-            self._log_audit("watchlist_create", t.key, None, row)
-            return {"ticker": t.key, "instrument": instrument_str, "created": True}
+                ws.append_row(row, value_input_option="USER_ENTERED")
+                self._log_audit("watchlist_create", t.key, None, row)
+                return {
+                    "ticker": t.key,
+                    "instrument": instrument_str,
+                    "created": True,
+                }
 
-        # Update: only touch fields explicitly provided
-        import gspread.utils as gutils
+            # Update: only touch fields explicitly provided
+            import gspread.utils as gutils
 
-        fields: dict[str, str] = {}
-        if note is not None:
-            fields["Note"] = note
-        if criteria is not None:
-            fields["Criteria"] = criteria
-        if tags is not None:
-            fields["Tags"] = _format_tags(tags)
+            fields: dict[str, str] = {}
+            if note is not None:
+                fields["Note"] = note
+            if criteria is not None:
+                fields["Criteria"] = criteria
+            if tags is not None:
+                fields["Tags"] = _format_tags(tags)
 
-        batch = []
-        for field, new_value in fields.items():
-            if field not in headers:
-                continue
-            col_idx = headers.index(field) + 1
-            a1 = gutils.rowcol_to_a1(row_idx, col_idx)
-            batch.append({"range": a1, "values": [[new_value]]})
+            batch = []
+            for field, new_value in fields.items():
+                if field not in headers:
+                    continue
+                col_idx = headers.index(field) + 1
+                a1 = gutils.rowcol_to_a1(row_idx, col_idx)
+                batch.append({"range": a1, "values": [[new_value]]})
 
-        if batch:
-            ws.batch_update(batch)
-            self._log_audit("watchlist_update", t.key, current_row, fields)
+            if batch:
+                ws.batch_update(batch)
+                self._log_audit("watchlist_update", t.key, current_row, fields)
 
-        return {"ticker": t.key, "created": False}
+            return {"ticker": t.key, "created": False}
 
     # Delete
     def delete_watchlist_row(self, ticker: str) -> None:
@@ -207,15 +226,15 @@ class GSheet_Manager:
         if not t:
             raise ValueError(f"Invalid ticker: {ticker}")
 
-        sh = self._open_sheet()
-        ws = self._worksheet_by_gid(sh, self.WATCHLIST_GID)
+        with self._open_sheet() as sh:
+            ws = self._worksheet_by_gid(sh, self.WATCHLIST_GID)
 
-        row_idx, _, current_row = self._find_watchlist_row(ws, t.key)
-        if row_idx is None:
-            raise WatchlistNotFoundError(f"{t.key} not found on the watchlist")
+            row_idx, _, current_row = self._find_watchlist_row(ws, t.key)
+            if row_idx is None:
+                raise WatchlistNotFoundError(f"{t.key} not found on the watchlist")
 
-        ws.delete_rows(row_idx)
-        self._log_audit("watchlist_delete", t.key, current_row, None)
+            ws.delete_rows(row_idx)
+            self._log_audit("watchlist_delete", t.key, current_row, None)
 
     def _log_audit(self, action: str, ticker: str, before, after) -> None:
         from app.core.logger import get_logger

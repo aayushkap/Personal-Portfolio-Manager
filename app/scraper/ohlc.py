@@ -10,6 +10,27 @@ from app.data.db import DB
 logger = get_logger()
 
 
+def _fetch_history(
+    tv_exchange: str, symbol: str, interval: Interval, bars: int
+) -> pd.DataFrame:
+    """Fetch one history response and release tvDatafeed's WebSocket.
+
+    tvDatafeed opens a connection in ``get_hist`` but does not close it itself.
+    This worker runs continuously, so every OHLC request must close the socket.
+    """
+    client = TvDatafeed()
+    try:
+        return client.get_hist(
+            symbol=symbol,
+            exchange=tv_exchange,
+            interval=interval,
+            n_bars=bars,
+        )
+    finally:
+        if client.ws is not None:
+            client.ws.close()
+
+
 async def _set_ohlc(
     tv_exchange: str,
     symbol: str,
@@ -25,12 +46,11 @@ async def _set_ohlc(
         try:
             df = await loop.run_in_executor(
                 None,
-                lambda: TvDatafeed().get_hist(
-                    symbol=symbol,
-                    exchange=tv_exchange,
-                    interval=interval,
-                    n_bars=bars,
-                ),
+                _fetch_history,
+                tv_exchange,
+                symbol,
+                interval,
+                bars,
             )
 
             if df is not None and not df.empty:

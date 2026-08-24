@@ -67,9 +67,7 @@ class GSheet_Manager:
                 if not values:
                     return []
                 headers = [h for h in values[0] if h]
-                rows = [
-                    dict(zip(headers, row)) for row in values[1:] if row and row[0]
-                ]
+                rows = [dict(zip(headers, row)) for row in values[1:] if row and row[0]]
                 return self._format_watchlist(rows)
         except Exception:
             import traceback

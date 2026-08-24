@@ -100,6 +100,8 @@ class PortfolioQuery:
 
         for ticker in self.cache_repo.list_tickers():
             raw = self.cache_repo.get_raw_ticker(ticker)
+            if not isinstance(raw, dict):
+                raw = {}
             details = raw.get("purchase_details") or []
 
             for d in details:
@@ -278,6 +280,8 @@ class PortfolioQuery:
             ticker_tx["running_shares"] = ticker_tx["net_shares"].cumsum()
 
             raw = self.cache_repo.get_raw_ticker(ticker)
+            if not isinstance(raw, dict):
+                raw = {}
             div_rows = (raw.get("dividends") or {}).get("rows") or []
             ticker_currency = self.cache_repo.resolve_currency(raw)
 

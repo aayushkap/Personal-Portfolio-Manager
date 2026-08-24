@@ -1,9 +1,16 @@
 import json
 import random
-from google import genai
-from google.genai import types
 from app.config import QUOTE_PATH, GEMINI_KEY
 from app.data.files import atomic_write_json
+from google import genai
+from google.genai import types
+
+# Use SystemRandom so entropy is re-pulled from the OS on every single call,
+# even if this process stays warm and write() is called repeatedly.
+_rng = random.SystemRandom()
+
+HISTORY_PATH = QUOTE_PATH.with_name("quote_history.json")
+HISTORY_LIMIT = 10  # remember last N authors, ban them from the next pull
 
 _LENSES = [
     # --- Street / Hustle ---
@@ -125,6 +132,33 @@ _DOMAINS = [
     "the sacred, terrifying quality of a life fully committed to one direction",
 ]
 
+# NOTE: this used to be one giant static block pasted into EVERY prompt.
+# That's what was causing the repetition — the model kept completing
+# toward the same names because they were always sitting in the context.
+# Now it's a pool we sample 3 territories from per call, so the model
+# never sees the same reference set twice in a row.
+_SOURCE_POOLS = [
+    "Greek & Roman myth — Prometheus, Icarus, Achilles, Odysseus, Sisyphus, "
+    "Heracles, Daedalus, Orpheus, Leonidas, Atalanta, Ajax, Medea, Antigone. "
+    "Reach for the unfamous passage, not the anthology line.",
+    "Stoics under real pressure — Marcus Aurelius at the front, Seneca's "
+    "final letters to Lucilius, Epictetus, Cato choosing death over mercy.",
+    "War & strategy — Sun Tzu, Hannibal, Patton's unedited speeches, "
+    "Wellington, Caesar's private letters, soldiers' last letters home.",
+    "Literature that cuts — Dostoevsky, Camus, Nietzsche's notebooks, Kafka, "
+    "Hemingway, Faulkner, Borges.",
+    "Poetry of consequence — Rilke, Bukowski, Whitman, Dylan Thomas, Keats "
+    "writing while dying, Milton, Plath.",
+    "Sacred texts, the violent honest parts — Bhagavad Gita, Job, "
+    "Ecclesiastes, Psalms of desperation, Tao Te Ching.",
+    "Cinema that felt mythic — Apocalypse Now, There Will Be Blood, "
+    "Whiplash, Raging Bull, No Country for Old Men, Ikiru, Seven Samurai.",
+    "Anonymous & oral tradition — Spartan laconic sayings, samurai jisei "
+    "death poems, last words of the condemned, prison letters.",
+    "Founders & builders at the edge — Tesla's letters, Jobs's wilderness "
+    "years, Bezos's original shareholder letters, Burry's pre-2008 letters.",
+]
+
 PROMPT = """You are a collector of words that hit like a physical force — lines that have been carved by real consequence.
 
 Inhabit this perspective completely: {lens}
@@ -149,84 +183,61 @@ IMMEDIATELY DISCARD anything that resembles:
 - Anything a life coach would say without having lived anything.
 - Anything that asks nothing of the person reading it.
 
-YOU ARE HUNTING FOR:
-— The line Seneca wrote knowing Nero had already signed the order.
-— The death poem a samurai composed the morning of their last battle.
-— The thing Achilles said when told that glory meant dying young.
-— The words Camus used to describe why you revolt even when it's absurd.
-— The passage from the Bhagavad Gita where Krishna tells Arjuna to fight regardless of outcome.
-— The line from Bukowski that made you realize he had lived more in failure than most people do in success.
-— The letter Rilke wrote that made someone's entire understanding of patience collapse and rebuild.
-— What a fighter thinks in the second between being knocked down and deciding to rise.
-— The kind of thing Patton actually said — not the cleaned-up version.
-— The last transmission. The final entry. The words written when there was nothing left to lose.
-
-RICH SOURCE TERRITORIES — reach into these:
-GREEK & ROMAN MYTH: Prometheus (fire, punishment, no regret), Icarus (altitude as a choice, not a mistake), Achilles (mortality chosen for glory), Odysseus (endurance, cunning, the long way home), Sisyphus (Camus: one must imagine him happy), Heracles (the labors as a form of becoming), Daedalus (the craftsman who built the cage and the wings), Orpheus (love that descends into death), Leonidas (the 300, the pass, the choice already made), Atalanta, Ajax, Medea, Antigone
-
-STOICS UNDER PRESSURE: Marcus Aurelius at the front lines writing Meditations, Seneca's final letters to Lucilius, Epictetus on what cannot be taken from you, Cato choosing death over Caesar's mercy
-
-WAR & STRATEGY: Sun Tzu on winning before the battle begins, Hannibal crossing the Alps, Patton's actual speeches, Wellington, Caesar's private letters, soldiers' last letters home that contain more philosophy than most books
-
-LITERATURE THAT CUTS: Dostoevsky (the man who faced a firing squad), Camus on revolt and absurdity, Nietzsche at full force, Kafka on transformation and isolation, Hemingway without the bravado, Fitzgerald at his most honest, Faulkner on time, Borges on labyrinths
-
-POETRY OF CONSEQUENCE: Rilke's Letters to a Young Poet, Bukowski's rawest work, Whitman on the self, Dylan Thomas on raging against the dying of the light, Keats writing when he knew he was dying, Milton descending into blindness and continuing, Plath at her most precise
-
-SACRED TEXTS (the honest violent parts): The Bhagavad Gita — Krishna telling Arjuna to act without attachment to outcome, Job demanding answers from God, Ecclesiastes on vanity and action anyway, the Psalms of desperation, the Tao Te Ching on emptiness as power
-
-CINEMA & DRAMA THAT FELT MYTHIC: Apocalypse Now, There Will Be Blood, Whiplash, Raging Bull, No Country for Old Men, Magnolia, The Assassination of Jesse James, Ikiru, Seven Samurai, The Wages of Fear
-
-ANONYMOUS & ORAL TRADITION: Spartan sayings (laconic phrases), samurai jisei (death poems), last words of the condemned, prison letters that contain more wisdom than any self-help book, folk sayings from cultures that understood hardship
-
-FOUNDERS & BUILDERS AT THE EDGE: Tesla's actual letters, Jobs in the wilderness years, Bezos's original shareholder letters, Michael Burry's investor letters before 2008, any founder writing at 3am in the year before breakthrough
+Reach into THESE territories only this round — go to the buried, unfamous passage inside them,
+not the greatest-hits line everyone already knows:
+{territories}
 
 THE ONE TEST — apply this ruthlessly:
-Before selecting a quote, ask: does reading this create a PHYSICAL RESPONSE?
-Chest tightens. Jaw sets. Something shifts in the sternum. The urge to stand up and move.
-Not: does it sound smart? Not: is it famous? Not: would someone retweet it?
-Does it make the body respond before the brain has finished processing?
-Does it name something the reader has felt but never had language for?
-Does it cost something to read — like it's asking something of you?
-
-If yes to all three: this is the quote.
-If no to any: discard and go deeper.
+Does reading this create a PHYSICAL RESPONSE? Chest tightens. Jaw sets. Something shifts in
+the sternum. The urge to stand up and move. Not: does it sound smart? Not: is it famous?
+Does it name something the reader has felt but never had language for? Does it cost something
+to read — like it's asking something of you?
+If yes to all: this is the quote. If no to any: discard and go deeper.
 
 FINAL MANDATE:
-Reach for the uncommon. The quote most people have never encountered.
-Not the famous Nietzsche line everyone knows — the one from the notebooks.
-Not the famous Seneca quote — the one from the letter written three days before his death.
-Not the famous Achilles speech — the one Homer included that translators often soften.
-Go to the edge of the source. Find what's buried.
+Reach for the uncommon. The quote most people have never encountered. Not the famous line
+everyone knows from these figures — the one buried in the notebook, the private letter, the
+verse that gets cut from anthologies. Go to the edge of the source.
 
 Hard rules:
-- Real quote or real literary/mythic line with a genuine source
-- Use "Anonymous" only when origin is genuinely unknown
-- DO NOT return this quote ( or anything similar ): "{previous_quote}"
-- Author field: be specific — name the person, the work, the context if needed
+- Real quote or real literary/mythic line with a genuine source.
+- Use "Anonymous" only when origin is genuinely unknown.
+- DO NOT use any of these authors/sources — all used in the last {n} weeks: {banned}
+- Author field: be specific — name the person, the work, the context if needed.
 
 Return ONLY valid JSON. Nothing else. No preamble. No explanation. No markdown."""
 
 
 class QuoteStore:
-    def __init__(self, model: str = "gemini-2.5-flash"):
+    def __init__(self, model: str = "gemini-3.7-flash"):
         self.client = genai.Client(api_key=GEMINI_KEY)
         self.model = model
 
-    def write(self) -> dict:
-        previous = ""
-        if QUOTE_PATH.exists():
+    def _load_history(self) -> list[str]:
+        if HISTORY_PATH.exists():
             try:
-                previous = json.loads(QUOTE_PATH.read_text(encoding="utf-8")).get(
-                    "quote", ""
-                )
+                return json.loads(HISTORY_PATH.read_text(encoding="utf-8"))
             except Exception:
-                pass
+                return []
+        return []
+
+    def _save_history(self, history: list[str], new_author: str):
+        history.append(new_author)
+        atomic_write_json(HISTORY_PATH, history[-HISTORY_LIMIT:])
+
+    def write(self) -> dict:
+        history = self._load_history()
+        banned = ", ".join(history) if history else "none yet"
+
+        territories = "\n".join(f"- {t}" for t in _rng.sample(_SOURCE_POOLS, 3))
 
         prompt = PROMPT.format(
-            lens=random.choice(_LENSES),
-            mood=random.choice(_MOODS),
-            domain=random.choice(_DOMAINS),
-            previous_quote=previous,
+            lens=_rng.choice(_LENSES),
+            mood=_rng.choice(_MOODS),
+            domain=_rng.choice(_DOMAINS),
+            territories=territories,
+            banned=banned,
+            n=len(history),
         )
 
         response = self.client.models.generate_content(
@@ -247,8 +258,15 @@ class QuoteStore:
         )
         data = json.loads(response.text)
         atomic_write_json(QUOTE_PATH, data)
+        self._save_history(history, data.get("author", "Unknown"))
         return data
 
     @staticmethod
     def read() -> dict:
         return json.loads(QUOTE_PATH.read_text(encoding="utf-8"))
+
+
+if __name__ == "__main__":
+    store = QuoteStore()
+    quote = store.write()
+    print(json.dumps(quote, indent=2))

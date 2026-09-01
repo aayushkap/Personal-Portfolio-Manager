@@ -20,7 +20,7 @@ schemas needed unless strict typing is required later.
 from __future__ import annotations
 
 from datetime import date, timedelta
-from typing import Optional, List
+from typing import Literal, Optional, List
 
 from pydantic import BaseModel, field_validator, model_validator
 
@@ -59,6 +59,12 @@ class DateRangeRequest(BaseModel):
         if isinstance(v, str):
             return date.fromisoformat(v)
         return v
+
+    @model_validator(mode="after")
+    def validate_order(self):
+        if self.start > self.end:
+            raise ValueError("date_range.start must be on or before date_range.end")
+        return self
 
     def to_domain(self) -> DateRange:
         return DateRange(start=self.start, end=self.end)
@@ -109,6 +115,54 @@ class AnalyticsPerformanceRequest(BaseModel):
 
     date_range: DateRangeRequest = Field(default_factory=DateRangeRequest)
     include_dividends: bool = True
+
+    def to_filters(self) -> PortfolioFilters:
+        return PortfolioFilters(date_range=self.date_range.to_domain())
+
+
+class PerformancePageRequest(BaseModel):
+    """Options for the consolidated Portfolio Performance page."""
+
+    date_range: DateRangeRequest = Field(default_factory=DateRangeRequest)
+    include_dividends: bool = True
+    benchmark_mode: Literal["blended", "single"] = "blended"
+    benchmark_indices: list[str] | None = None
+    x_axis: Literal[
+        "volatility_annualized_pct",
+        "max_drawdown_pct",
+        "beta",
+        "sharpe_ratio",
+        "sortino_ratio",
+        "risk_contribution_pct",
+        "weight_pct",
+        "yield_on_cost_pct",
+        "twr_pct",
+    ] = "volatility_annualized_pct"
+    y_axis: Literal[
+        "volatility_annualized_pct",
+        "max_drawdown_pct",
+        "beta",
+        "sharpe_ratio",
+        "sortino_ratio",
+        "risk_contribution_pct",
+        "weight_pct",
+        "yield_on_cost_pct",
+        "twr_pct",
+    ] = "twr_pct"
+
+    @field_validator("benchmark_indices")
+    @classmethod
+    def clean_benchmark_indices(cls, values: list[str] | None) -> list[str] | None:
+        if values is None:
+            return None
+        cleaned = list(
+            dict.fromkeys(value.strip().upper() for value in values if value.strip())
+        )
+        if not cleaned:
+            raise ValueError(
+                "benchmark_indices must contain at least one non-empty index"
+            )
+        return cleaned
 
     def to_filters(self) -> PortfolioFilters:
         return PortfolioFilters(date_range=self.date_range.to_domain())

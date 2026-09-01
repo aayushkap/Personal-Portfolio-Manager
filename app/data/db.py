@@ -156,6 +156,21 @@ class DB:
             ).fetchone()
         return dict(row) if row else None
 
+    def get_latest_on_or_before(self, symbol: str, timestamp: str) -> Optional[dict]:
+        """Return the most recent bar for ``symbol`` no later than ``timestamp``."""
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT symbol, timestamp, close, volume
+                FROM ohlc
+                WHERE symbol = ? AND timestamp <= ?
+                ORDER BY timestamp DESC
+                LIMIT 1
+                """,
+                (symbol, timestamp),
+            ).fetchone()
+        return dict(row) if row else None
+
     def get_all_symbols(self) -> list[str]:
         with self.connection() as conn:
             rows = conn.execute("SELECT DISTINCT symbol FROM ohlc").fetchall()

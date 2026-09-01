@@ -126,11 +126,20 @@ class PriceRepository:
 
         return out.sort_index()
 
-    def get_latest_price(self, ticker: str) -> dict:
+    def get_latest_price(self, ticker: str, on: date | None = None) -> dict:
         """
-        Returns a simple dictionary snapshot of the latest price in AED.
+        Returns a simple AED price snapshot, optionally as of a historical date.
         """
-        row = self._db.get_latest(ticker)
+        if on is None:
+            row = self._db.get_latest(ticker)
+        else:
+            cutoff = (
+                pd.Timestamp(on)
+                .tz_localize("Asia/Dubai")
+                .replace(hour=23, minute=59, second=59)
+                .isoformat()
+            )
+            row = self._db.get_latest_on_or_before(ticker, cutoff)
         if not row:
             return {}
 

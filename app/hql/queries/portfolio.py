@@ -8,15 +8,20 @@ from typing import Literal
 import pandas as pd
 
 from app.utils.parsers import parse_date, parse_money_string, parse_number
+from app.hql.errors import HQLTickerNotFound
 from app.hql.repositories import CacheRepository, FXService, PriceRepository
+from app.hql.queries.portfolio_returns import PortfolioReturnsMixin
 
 
-class PortfolioQuery:
+class PortfolioQuery(PortfolioReturnsMixin):
     """
     Portfolio domain abstraction.
 
     Provides clean, functional access to portfolio state, history, and metrics.
-    All monetary values returned are consistently in AED.
+    All monetary values returned are consistently in AED. Return/risk
+    analytics (realized P&L, TWR, benchmark weights, returns matrix) live in
+    PortfolioReturnsMixin (portfolio_returns.py) to keep this file focused on
+    state.
     """
 
     def __init__(
@@ -28,6 +33,12 @@ class PortfolioQuery:
         self.cache_repo = cache_repo
         self.price_repo = price_repo
         self.fx = fx
+        # A PortfolioQuery is created fresh per HQL facade call and lives only
+        # for the duration of one request -- memoizing these two here removes
+        # repeated full-cache-directory scans when a single endpoint needs
+        # transactions()/dividends() many times (e.g. once per position).
+        self._transactions_cache: pd.DataFrame | None = None
+        self._dividends_cache: dict[date, pd.DataFrame] = {}
 
     # Internal helpers
     def _build_daily_shares(
@@ -96,10 +107,21 @@ class PortfolioQuery:
                 Columns: ticker, date, transaction, platform, sector, exchange,
                          shares, price, price_aed, total_cost, total_cost_aed, currency
         """
+        if self._transactions_cache is not None:
+            return self._transactions_cache
+        self._transactions_cache = self._load_transactions()
+        return self._transactions_cache
+
+    def _load_transactions(self) -> pd.DataFrame:
         rows: list[dict] = []
 
         for ticker in self.cache_repo.list_tickers():
-            raw = self.cache_repo.get_raw_ticker(ticker)
+            try:
+                raw = self.cache_repo.get_raw_ticker(ticker)
+            except HQLTickerNotFound:
+                # Stray cache keys (e.g. quote/history collection markers)
+                # that aren't real ticker documents — no purchases to read.
+                continue
             if not isinstance(raw, dict):
                 raw = {}
             details = raw.get("purchase_details") or []
@@ -195,15 +217,40 @@ class PortfolioQuery:
                 ]
             )
 
-        sign = work["transaction"].str.lower().map({"buy": 1, "sell": -1}).fillna(0)
-        work["net_shares"] = work["shares"].fillna(0) * sign
-        work["net_cost"] = work["total_cost_aed"].fillna(0) * sign
+        # Maintain the remaining average-cost basis, rather than subtracting
+        # sale proceeds from purchase cost. A partial sale changes the number
+        # of shares and realizes P&L; it does not make the unsold shares
+        # cheaper. This matches the realized-P&L ledger used elsewhere.
+        work["_tx_lower"] = work["transaction"].str.lower()
+        work = work.sort_values(["date", "_tx_lower"], kind="stable")
+        positions: list[dict] = []
+        for ticker, ticker_tx in work.groupby("ticker", sort=True):
+            shares = 0.0
+            cost_basis = 0.0
+            for _, row in ticker_tx.iterrows():
+                quantity = float(row["shares"]) if pd.notna(row["shares"]) else 0.0
+                if row["_tx_lower"] == "buy":
+                    shares += quantity
+                    cost_basis += (
+                        float(row["total_cost_aed"])
+                        if pd.notna(row["total_cost_aed"])
+                        else 0.0
+                    )
+                elif row["_tx_lower"] == "sell" and shares > 0:
+                    sold = min(quantity, shares)
+                    cost_basis -= cost_basis / shares * sold
+                    shares -= sold
+            if shares > 0:
+                positions.append(
+                    {
+                        "ticker": ticker,
+                        "shares": shares,
+                        "cost_basis_aed": cost_basis,
+                    }
+                )
 
-        grouped = work.groupby("ticker", as_index=False).agg(
-            shares=("net_shares", "sum"), cost_basis_aed=("net_cost", "sum")
-        )
-        grouped = (
-            grouped[grouped["shares"] != 0].sort_values("ticker").reset_index(drop=True)
+        grouped = pd.DataFrame(
+            positions, columns=["ticker", "shares", "cost_basis_aed"]
         )
 
         if grouped.empty:
@@ -211,7 +258,7 @@ class PortfolioQuery:
 
         price_map = {}
         for ticker in grouped["ticker"]:
-            latest = self.price_repo.get_latest_price(ticker)
+            latest = self.price_repo.get_latest_price(ticker, on=on)
             price_map[ticker] = latest.get("close", 0)
 
         grouped["last_price_aed"] = grouped["ticker"].map(price_map)
@@ -250,6 +297,12 @@ class PortfolioQuery:
                     total_aed            — total income (shares_held × amount_per_share_aed)
                     status               — 'received' or 'pending'
         """
+        key = on or date.today()
+        if key not in self._dividends_cache:
+            self._dividends_cache[key] = self._load_dividends(on)
+        return self._dividends_cache[key]
+
+    def _load_dividends(self, on: date | None = None) -> pd.DataFrame:
         today = on or date.today()
         tx = self.transactions()
 
@@ -422,43 +475,14 @@ class PortfolioQuery:
             .clip(lower=0)
         )
 
-        # Cumulative realized P&L from closed positions
-        # Realized gain on a sell = sell proceeds - proportional cost basis.
-        # Simple approach: for each sell, realized = sell_total - avg_cost × shares_sold.
-        # We calculate this per ticker using a running average cost method.
-        realized_events: dict[date, float] = {}
-        avg_cost: dict[str, float] = {}  # ticker → current avg cost per share in AED
-        running: dict[str, float] = {}  # ticker → current shares held
-
-        tx_ordered = tx.assign(_tx_lower=tx["transaction"].str.lower()).sort_values(
-            ["date_clean", "_tx_lower"], kind="stable", ascending=[True, True]
+        # Cumulative realized P&L from closed positions, via a running
+        # average-cost ledger shared with realized_pnl().
+        events_df = self._realized_events(tx)
+        realized_events: dict[date, float] = (
+            events_df.groupby("date")["realized_aed"].sum().to_dict()
+            if not events_df.empty
+            else {}
         )
-        for _, row in tx_ordered.iterrows():
-            ticker = row["ticker"]
-            shares = row["shares"] if pd.notna(row["shares"]) else 0.0
-            cost = row["total_cost_aed"] if pd.notna(row["total_cost_aed"]) else 0.0
-            tx_type = (row["transaction"] or "").strip().lower()
-            tx_date = row["date_clean"]
-
-            if tx_type == "buy":
-                prev_shares = running.get(ticker, 0.0)
-                prev_avg = avg_cost.get(ticker, 0.0)
-                new_shares = prev_shares + shares
-                avg_cost[ticker] = (
-                    ((prev_shares * prev_avg) + cost) / new_shares
-                    if new_shares
-                    else 0.0
-                )
-                running[ticker] = new_shares
-
-            elif tx_type == "sell":
-                cost_basis_of_sold = avg_cost.get(ticker, 0.0) * shares
-                gain = cost - cost_basis_of_sold
-                event_date = tx_date.date() if hasattr(tx_date, "date") else tx_date
-                realized_events[event_date] = (
-                    realized_events.get(event_date, 0.0) + gain
-                )
-                running[ticker] = max(0.0, running.get(ticker, 0.0) - shares)
 
         # Specify the dtype for the empty/no-sales case as well.  Otherwise pandas
         # creates an object series, which is silently downcast by the fill below

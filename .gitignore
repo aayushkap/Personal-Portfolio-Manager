@@ -13,6 +13,8 @@ cache/
 .run/
 commands_hs.txt
 
+CLAUDE.md
+
 # Distribution / packaging
 .Python
 build/

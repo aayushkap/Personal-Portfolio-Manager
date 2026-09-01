@@ -233,6 +233,53 @@ class StockAnalysisScraper:
         except Exception:
             pass
 
+        try:
+            sector = await page.evaluate("""() => {
+                    const grid = [...document.querySelectorAll('div.grid')].find(
+                        (g) => [...g.querySelectorAll('span.font-semibold')]
+                            .some((s) => /^Sector$/i.test(s.textContent.trim()))
+                        || [...g.querySelectorAll('span.font-semibold')]
+                            .some((s) => /^Industry$/i.test(s.textContent.trim()))
+                    );
+                    if (!grid) return null;
+
+                    const getValueFor = (label) => {
+                        const span = [...grid.querySelectorAll('span.font-semibold')].find(
+                            (s) => new RegExp('^' + label + '$', 'i').test(s.textContent.trim())
+                        );
+                        if (!span) return null;
+                        const container = span.closest('div.col-span-1') || span.parentElement;
+                        const link = container?.querySelector('a');
+                        const fallbackSpan = container?.querySelector('span:not(.font-semibold)');
+                        const raw = (link || fallbackSpan)?.textContent?.trim();
+                        return raw || null;
+                    };
+
+                    let value = getValueFor('Sector');
+                    let usedIndustryFallback = false;
+
+                    if (!value) {
+                        value = getValueFor('Industry');
+                        usedIndustryFallback = true;
+                    }
+
+                    if (!value) return null;
+
+                    if (usedIndustryFallback && value.includes('-')) {
+                        value = value.split('-')[0].trim();
+                    }
+
+                    return value.replace(/\\s+/g, ' ').trim() || null;
+                }""")
+            if sector:
+                data["sector"] = sector
+        except Exception:
+            pass
+
+        print(f"Data scraped for {exchange}:{symbol}: {data}")
+
+        exit(0)
+
         # Summary stats table
         stats = {}
         try:
@@ -663,7 +710,7 @@ class StockAnalysisScraper:
 
 async def main():
     obj = StockAnalysisScraper(headless=False)
-    res = await obj.scrape({"exchange": "DFM", "symbol": "DUBAIRESI"})
+    res = await obj.scrape({"exchange": "NASDAQ", "symbol": "MSFT"})
     import json
 
     with open("filename.json", "w") as f:

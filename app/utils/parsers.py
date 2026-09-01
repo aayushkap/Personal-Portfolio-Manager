@@ -7,6 +7,19 @@ import math
 
 _SUFFIXES = {"K": 1e3, "M": 1e6, "B": 1e9, "T": 1e12}
 
+# StockAnalysis sometimes renders cash amounts with a currency symbol rather
+# than an ISO code (for example, UKW dividends are returned as "£0.0268").
+# Keep this mapping here so every portfolio consumer assigns the right FX rate.
+# "$" is necessarily ambiguous, so we interpret a bare dollar sign as USD;
+# Canadian dollars can be supplied as C$ or CA$.
+_CURRENCY_SYMBOLS = {
+    "CA$": "CAD",
+    "C$": "CAD",
+    "£": "GBP",
+    "€": "EUR",
+    "$": "USD",
+}
+
 
 def parse_date(value: Any) -> date | None:
     if not value or str(value).strip() in {"", "-", "n/a", "None"}:
@@ -64,12 +77,27 @@ def parse_money_string(value: Any) -> tuple[float | None, str | None]:
     s = str(value).strip()
     if not s or s in {"-", "n/a", "None"}:
         return None, None
-    m = re.search(r"([A-Z]{3})\s*([\d,.\-]+)|([\d,.\-]+)\s*([A-Z]{3})", s)
+
+    # Prefer the longer symbols first so "CA$" is never mistaken for "$".
+    for symbol, currency in sorted(
+        _CURRENCY_SYMBOLS.items(), key=lambda item: len(item[0]), reverse=True
+    ):
+        escaped = re.escape(symbol)
+        m = re.fullmatch(rf"{escaped}\s*([\d,.\-]+)", s)
+        if not m:
+            m = re.fullmatch(rf"([\d,.\-]+)\s*{escaped}", s)
+        if m:
+            return parse_number(m.group(1)), currency
+
+    m = re.search(
+        r"([A-Za-z]{2,4})\s*([\d,.\-]+)|([\d,.\-]+)\s*([A-Za-z]{2,4})",
+        s,
+    )
     if not m:
         return parse_number(s), None
     if m.group(1) and m.group(2):
-        return parse_number(m.group(2)), m.group(1)
-    return parse_number(m.group(3)), m.group(4)
+        return parse_number(m.group(2)), m.group(1).upper()
+    return parse_number(m.group(3)), m.group(4).upper()
 
 
 def parse_range(value: Any) -> tuple[float | None, float | None]:

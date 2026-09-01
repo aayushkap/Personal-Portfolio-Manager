@@ -23,6 +23,7 @@ from app.services.overview import OverviewModule
 from app.services.analytics import AnalyticsModule
 from app.services.correlation import CorrelationModule
 from app.services.holdings import HoldingsModule
+from app.services.performance import PerformanceModule
 from app.services.watchlist import WatchlistModule
 from app.services.system import SystemModule
 
@@ -56,6 +57,11 @@ def get_correlation_module() -> CorrelationModule:
 @lru_cache(maxsize=1)
 def get_holdings_module() -> HoldingsModule:
     return HoldingsModule(cache=get_cache(), db=get_db())
+
+
+@lru_cache(maxsize=1)
+def get_performance_module() -> PerformanceModule:
+    return PerformanceModule(cache=get_cache(), db=get_db())
 
 
 @lru_cache(maxsize=1)

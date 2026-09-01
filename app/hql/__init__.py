@@ -6,6 +6,7 @@ from app.data.cache import Cache
 from app.data.db import DB
 from app.hql.queries.ticker import TickerQuery, TickersQuery
 from app.hql.queries.portfolio import PortfolioQuery
+from app.hql.queries.risk import RiskQuery
 from app.hql.queries.watchlist import WatchlistQuery
 from app.hql.repositories import CacheRepository, FXService, PriceRepository
 
@@ -53,6 +54,9 @@ class HQL:
             price_repo=self.price_repo,
             fx=self.fx,
         )
+
+    def risk(self) -> RiskQuery:
+        return RiskQuery()
 
     def watchlist(self) -> WatchlistQuery:
         return WatchlistQuery(

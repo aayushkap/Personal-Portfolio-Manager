@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends
 from app.api.deps import get_overview_module
 from app.services.overview import OverviewModule
 from app.services.overlays import OverlayResolver
+from app.services.technicals import TECHNICAL_CATALOGUE
 from app.data.gsheet import GSheet_Manager
 
 router = APIRouter(prefix="/metadata", tags=["Metadata"])
@@ -41,6 +42,7 @@ def get_metadata(module: OverviewModule = Depends(get_overview_module)):
                 "instruments": [],
                 "first_investment_date": None,
                 "available_overlays": OverlayResolver(module).catalogue(),
+                "available_technicals": list(TECHNICAL_CATALOGUE),
                 "watchlist": watchlist_tickers,
             }
         else:
@@ -49,6 +51,7 @@ def get_metadata(module: OverviewModule = Depends(get_overview_module)):
                 "instruments": sorted(tx["ticker"].unique().tolist()),
                 "first_investment_date": tx["trade_date"].min().isoformat(),
                 "available_overlays": OverlayResolver(module).catalogue(),
+                "available_technicals": list(TECHNICAL_CATALOGUE),
                 "watchlist": watchlist_tickers,
             }
 

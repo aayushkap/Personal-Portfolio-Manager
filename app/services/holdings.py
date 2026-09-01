@@ -12,6 +12,7 @@ from app.core.logger import get_logger
 from app.services.base import BaseModule
 from app.services.filters import DateRange, PortfolioFilters
 from app.services.overlays import OverlayResolver, OVERLAY_CATALOGUE
+from app.services.technicals import is_technical_key, resolve_technical
 from app.utils.fin import safe_float as _safe
 from app.services.holdings_news import HoldingsNewsAgent
 
@@ -225,18 +226,7 @@ class HoldingsModule(BaseModule):
         timeframe: str,
         today: date,
     ) -> list[dict]:
-        _TIMEFRAME = {
-            "1d": {"granularity": "15min", "days_back": 1},
-            "1w": {"granularity": "30min", "days_back": 7},
-            "1m": {"granularity": "60min", "days_back": 30},
-            "3m": {"granularity": "1D", "days_back": 90},
-            "6m": {"granularity": "1D", "days_back": 180},
-            "1y": {"granularity": "1D", "days_back": 365},
-            "5y": {"granularity": "1D", "days_back": 365 * 5},
-            "all": {"granularity": "1D", "days_back": None},
-        }
-
-        config = _TIMEFRAME.get(timeframe, _TIMEFRAME["1m"])
+        config = HoldingsModule._timeframe_config(timeframe)
         days_back = config["days_back"]
         start = (today - timedelta(days=days_back)) if days_back else date(2000, 1, 1)
 
@@ -283,6 +273,8 @@ class HoldingsModule(BaseModule):
         range_filters = PortfolioFilters(date_range=DateRange(start=start, end=end))
 
         resolver = OverlayResolver(self)
+        own_close_full: pd.Series | None = None
+        display_start = pd.Timestamp(start)
         result: dict[str, list[dict]] = {}
 
         for key in overlays:
@@ -292,6 +284,24 @@ class HoldingsModule(BaseModule):
                 result[normalized] = HoldingsModule._series_to_records(
                     series, config["granularity"]
                 )
+                continue
+
+            if is_technical_key(normalized):
+                if own_close_full is None:
+                    # Fetch from full history, not just the visible window, so
+                    # SMA/EMA are seeded with bars before `start` and have a
+                    # value across the *entire* displayed range instead of
+                    # only appearing once `window` bars accumulate inside it.
+                    own_close_full = HoldingsModule._overlay_ticker_series(
+                        self, ticker, date(2000, 1, 1), end, config["granularity"]
+                    )
+                series = resolve_technical(normalized, own_close_full)
+                if not series.empty:
+                    series = series[series.index >= display_start]
+                if not series.empty:
+                    result[normalized] = HoldingsModule._series_to_records(
+                        series, config["granularity"]
+                    )
                 continue
 
             series = HoldingsModule._overlay_ticker_series(
@@ -308,8 +318,8 @@ class HoldingsModule(BaseModule):
     def _timeframe_config(timeframe: str) -> dict:
         mapping = {
             "1d": {"granularity": "15min", "days_back": 1},
-            "1w": {"granularity": "30min", "days_back": 7},
-            "1m": {"granularity": "60min", "days_back": 30},
+            "1w": {"granularity": "1h", "days_back": 7},
+            "1m": {"granularity": "1D", "days_back": 30},
             "3m": {"granularity": "1D", "days_back": 90},
             "6m": {"granularity": "1D", "days_back": 180},
             "1y": {"granularity": "1D", "days_back": 365},

@@ -10,6 +10,7 @@ from app.api.overview import router as overview
 from app.api.analytics import router as analytics
 from app.api.correlation import router as correlation
 from app.api.holdings import router as holdings
+from app.api.performance import router as performance
 from app.api.watchlist import router as watchlist
 from app.api.metadata import router as metadata
 from app.api.quote import router as quote
@@ -25,6 +26,7 @@ app.include_router(overview)
 app.include_router(analytics)
 app.include_router(correlation)
 app.include_router(holdings)
+app.include_router(performance)
 app.include_router(watchlist)
 app.include_router(metadata)
 app.include_router(quote)

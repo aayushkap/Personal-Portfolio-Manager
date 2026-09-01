@@ -56,6 +56,7 @@ class BaseModule:
         return [
             path.stem.replace("_", ":", 1).upper()
             for path in Path(self._cache.cache_dir).glob("*.json")
+            if path.name not in ("quote_history.json", "exchange.json")
         ]
 
     def get_dividends(self, ticker: str) -> list[DividendRow]:

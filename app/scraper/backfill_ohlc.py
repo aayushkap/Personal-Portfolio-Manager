@@ -73,6 +73,7 @@ async def main():
     DB.bootstrap()
     db = DB(read_only=False)
     required = _required_instruments()
+    print(f"Found {len(required)} required symbols")
     stale = _remove_stale_ohlc(db, set(required))
     print(f"Removed {len(stale)} stale symbols")
 
@@ -96,10 +97,10 @@ async def main():
             )
         ]
 
-    print(f"Len: {len(short)}")
+    print(f"Found {len(short)} symbols with insufficient OHLC data")
 
     for storage_key, exchange, symbol in short:
-        print(f"Backfilling {storage_key}")
+        print(f"Backfilling {storage_key}", flush=True)
         await _set_ohlc(exchange, symbol, bars=MIN_ROWS)
 
 

@@ -27,7 +27,7 @@ All criteria, critical & good to have: (For the critical criteria, all must be m
 {criteria}
 
 Current data (from internal systems):
-- Price: {price}. Currency is the same as the exchange the stock is listed on (e.g. USD for NYSE & NASDAQ, GBP / GBX for LSE, AED for DFM & ADX, etc.).
+- Price: {price}. Currency is the same as the exchange the stock is listed on (e.g. USD for NYSE & NASDAQ, GBP / GBX for LSE, EUR for Euronext, AED for DFM & ADX, etc.).
 - Fundamentals: {fundamentals}.
 
 Today: {today}

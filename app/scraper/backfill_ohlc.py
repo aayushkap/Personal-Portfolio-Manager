@@ -7,7 +7,7 @@ from app.data.gsheet import GSheet_Manager
 from app.scraper.ohlc import _set_ohlc
 from app.utils.time_utils import dubai_today
 
-MIN_ROWS = 10_000
+MIN_ROWS = 50_00
 STALE_AFTER_DAYS = 1
 
 

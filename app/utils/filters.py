@@ -7,9 +7,16 @@ from pathlib import Path
 
 from app.data.cache import Cache
 from app.data.db import DB
+from app.utils.parsers import parse_money_string
 
 cache = Cache()
 db = DB()
+
+
+def _money_value(value: object) -> float:
+    """Return the numeric portion of an ISO- or symbol-denominated amount."""
+    amount, _ = parse_money_string(value)
+    return amount or 0.0
 
 
 def get_all_transactions() -> pd.DataFrame:
@@ -32,21 +39,9 @@ def get_all_transactions() -> pd.DataFrame:
                         t["purchase date"], format="%m/%d/%Y"
                     ).date(),
                     "shares": float(t["shares"]),
-                    "price": float(
-                        str(t["cost per share"])
-                        .replace("AED", "")
-                        .replace(",", "")
-                        .strip()
-                    ),
-                    "commission": float(
-                        str(t["commision paid"])
-                        .replace("AED", "")
-                        .replace(",", "")
-                        .strip()
-                    ),
-                    "total_cost": float(
-                        str(t["total cost"]).replace("AED", "").replace(",", "").strip()
-                    ),
+                    "price": _money_value(t["cost per share"]),
+                    "commission": _money_value(t["commision paid"]),
+                    "total_cost": _money_value(t["total cost"]),
                     "platform": t.get("platform"),
                     "sector": t.get("sector"),
                     "exchange": t.get("exchange"),
@@ -140,9 +135,7 @@ def get_dividend_events(
                         "ticker": ticker,
                         "ex_date": pd.to_datetime(row["Ex-Dividend Date"]).date(),
                         "pay_date": pd.to_datetime(row["Pay Date"]).date(),
-                        "amount": float(
-                            str(row["Cash Amount"]).replace("AED", "").strip()
-                        ),
+                        "amount": _money_value(row["Cash Amount"]),
                     }
                 )
             except Exception:

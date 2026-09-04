@@ -278,8 +278,6 @@ class StockAnalysisScraper:
 
         print(f"Data scraped for {exchange}:{symbol}: {data}")
 
-        exit(0)
-
         # Summary stats table
         stats = {}
         try:

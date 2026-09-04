@@ -13,6 +13,7 @@ from app.config import BENCHMARKS
 from app.core.logger import get_logger
 from app.services.base import BaseModule
 from app.services.filters import PortfolioFilters
+from app.utils.parsers import sanitize_for_json
 
 logger = get_logger()
 
@@ -277,7 +278,7 @@ class AnalyticsModule(BaseModule):
         total_market = sum(p["market_value"] for p in positions)
         total_ret = sum(p["return_aed"] for p in positions)
 
-        return {
+        return sanitize_for_json({
             "mode": mode,
             "positions": positions,
             "summary": {
@@ -290,7 +291,7 @@ class AnalyticsModule(BaseModule):
                     else 0.0
                 ),
             },
-        }
+        })
 
     def get_allocation(
         self,

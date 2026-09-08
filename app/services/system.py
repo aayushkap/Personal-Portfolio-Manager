@@ -19,9 +19,14 @@ from __future__ import annotations
 
 import platform
 import socket
+from collections import deque
 from datetime import datetime, timezone
+from pathlib import Path
 
 import psutil
+
+LOG_DIR = Path("/home/akap/app/app/logs")
+LOG_LINES = 200
 
 
 class SystemModule:
@@ -52,7 +57,17 @@ class SystemModule:
             "power": self._get_power(),
             "temperatures": self._get_temperatures(),
             "top_processes": self._get_top_processes(limit=8),
+            "worker_log": self._get_log(LOG_DIR / "worker.log"),
+            "api_log": self._get_log(LOG_DIR / "api.log"),
         }
+
+    @staticmethod
+    def _get_log(path: Path) -> str:
+        try:
+            with path.open(encoding="utf-8", errors="replace") as log_file:
+                return "".join(deque(log_file, maxlen=LOG_LINES))
+        except OSError:
+            return ""
 
     # host
     def _get_host_info(self, boot_time: datetime, uptime_seconds: float) -> dict:

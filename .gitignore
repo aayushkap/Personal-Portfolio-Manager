@@ -14,6 +14,7 @@ cache/
 commands_hs.txt
 
 CLAUDE.md
+AGENT.md
 
 # Distribution / packaging
 .Python

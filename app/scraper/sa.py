@@ -8,6 +8,8 @@ import random
 import re
 from typing import Dict, Any
 from dateutil import parser
+import requests
+from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright, Browser, Page, BrowserContext
 from playwright_stealth import Stealth
 from app.utils.time_utils import dubai_now_iso
@@ -135,6 +137,109 @@ class StockAnalysisScraper:
         else:
             return False
         return any(str(tag).strip().upper() == "ETF" for tag in values)
+
+    @staticmethod
+    def _overview_confirms_no_dividends(overview: Any) -> bool:
+        """Return true only for an explicit no-dividend signal from the source.
+
+        A missing overview value is not enough evidence: it can result from a
+        challenge page or a partial load and must retain normal retry behavior.
+        """
+        if not isinstance(overview, dict):
+            return False
+        stats = overview.get("stats")
+        if not isinstance(stats, dict):
+            return False
+
+        no_dividend_values = {"n/a", "na", "not applicable", "none"}
+        for field in ("Dividend (ttm)", "Dividend", "Dividend Yield"):
+            value = stats.get(field)
+            if isinstance(value, str) and value.strip().lower() in no_dividend_values:
+                return True
+        return False
+
+    @staticmethod
+    def _empty_dividends(exchange: str, symbol: str, url: str) -> Dict[str, Any]:
+        """Build a successful, intentionally empty dividend-table result."""
+        return {
+            "symbol": symbol,
+            "exchange": exchange.upper(),
+            "url": url,
+            "scraped_at": dubai_now_iso(),
+            "headers": [],
+            "rows": [],
+        }
+
+    @staticmethod
+    def _parse_dividend_html(html: str) -> tuple[list[str], list[dict[str, str]]]:
+        """Extract StockAnalysis's server-rendered dividend table."""
+        soup = BeautifulSoup(html, "html.parser")
+        table = soup.select_one(".table-wrap table")
+        if table is None:
+            page_text = soup.get_text(" ", strip=True).lower()
+            no_history_markers = (
+                "there is no dividend history available",
+                "has never paid a dividend",
+                "does not pay a dividend",
+            )
+            if any(marker in page_text for marker in no_history_markers):
+                return [], []
+            title = soup.title.get_text(" ", strip=True) if soup.title else "untitled"
+            raise RuntimeError(f"dividend table absent from HTML ({title})")
+
+        headers = [
+            StockAnalysisScraper._normalise_dividend_header(
+                cell.get_text(" ", strip=True)
+            )
+            for cell in table.select("thead th")
+        ]
+        if not headers:
+            raise RuntimeError("dividend table has no headers")
+
+        rows = []
+        for tr in table.select("tbody tr"):
+            values = [cell.get_text(" ", strip=True) for cell in tr.select("td")]
+            if values:
+                rows.append(
+                    {
+                        headers[index]
+                        if index < len(headers)
+                        else f"col_{index}": value
+                        for index, value in enumerate(values)
+                    }
+                )
+        return headers, rows
+
+    @staticmethod
+    def _normalise_dividend_header(value: str) -> str:
+        """Restore canonical table headings split by nested source markup."""
+        compact = re.sub(r"[^a-z0-9]", "", value.lower())
+        canonical = {
+            "exdividenddate": "Ex-Dividend Date",
+            "cashamount": "Cash Amount",
+            "recorddate": "Record Date",
+            "paydate": "Pay Date",
+        }
+        return canonical.get(compact, " ".join(value.split()))
+
+    @classmethod
+    def _fetch_dividend_html(
+        cls, url: str
+    ) -> tuple[list[str], list[dict[str, str]]] | None:
+        """Fetch the static table, returning ``None`` for an actual 404 page."""
+        response = requests.get(
+            url,
+            headers={
+                "User-Agent": random.choice(cls.USER_AGENTS),
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            },
+            timeout=(10, 30),
+        )
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        return cls._parse_dividend_html(response.text)
 
     async def _safe_goto(
         self, page: Page, url: str, wait_for: str = "domcontentloaded"
@@ -391,6 +496,37 @@ class StockAnalysisScraper:
         url = f"{self._get_base_url(exchange, symbol, is_etf)}/dividend/"
 
         logger.info(f"Scraping dividends for ticker: \t {exchange}:{symbol}")
+
+        # StockAnalysis renders this table in its response HTML.  Its browser
+        # page is occasionally challenged or omits the table in headless
+        # Chromium even when the server response is valid, so prefer the much
+        # faster static path.  A real 404 is a successful empty history.
+        try:
+            extracted = await asyncio.to_thread(self._fetch_dividend_html, url)
+            if extracted is None:
+                logger.info("%s:%s has no dividend page", exchange, symbol)
+                return self._empty_dividends(exchange, symbol, url)
+
+            headers, rows = extracted
+            for row in rows:
+                for field in ("Ex-Dividend Date", "Record Date", "Pay Date"):
+                    if field in row:
+                        row[field] = self._to_iso_date(row[field])
+            return {
+                "symbol": symbol,
+                "exchange": exchange.upper(),
+                "url": url,
+                "scraped_at": dubai_now_iso(),
+                "headers": headers,
+                "rows": rows,
+            }
+        except Exception as exc:
+            logger.warning(
+                "%s:%s direct dividend fetch failed (%s); using browser fallback",
+                exchange,
+                symbol,
+                exc,
+            )
 
         await self._safe_goto(page, url)
         await self._human_mouse_wander(page)
@@ -654,6 +790,17 @@ class StockAnalysisScraper:
 
         for section_name, scrape_fn in sections:
             try:
+                if section_name == "dividends" and self._overview_confirms_no_dividends(
+                    result.get("overview")
+                ):
+                    url = f"{self._get_base_url(exchange, symbol, is_etf)}/dividend/"
+                    logger.info(
+                        "%s: overview confirms no cash dividends; skipping dividend page",
+                        key,
+                    )
+                    result[section_name] = self._empty_dividends(exchange, symbol, url)
+                    continue
+
                 result[section_name] = await scrape_fn()
                 if section_name != "ohlc":
                     await self._jitter(1.5, 2.0)

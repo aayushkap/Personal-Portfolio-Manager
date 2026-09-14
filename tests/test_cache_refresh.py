@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 from app.data.cache import Cache
+from app.scraper.sa import StockAnalysisScraper
 
 
 class CacheRefreshTests(unittest.TestCase):
@@ -73,3 +74,44 @@ class CacheRefreshTests(unittest.TestCase):
         self.assertEqual(
             self.cache.load(self.ticker)["dividends"], self.previous_dividends
         )
+
+    def test_explicit_no_dividend_overview_skips_the_dividend_page(self):
+        self.assertTrue(
+            StockAnalysisScraper._overview_confirms_no_dividends(
+                {"stats": {"Dividend (ttm)": "n/a"}}
+            )
+        )
+
+    def test_missing_dividend_overview_value_does_not_skip_retries(self):
+        self.assertFalse(
+            StockAnalysisScraper._overview_confirms_no_dividends({"stats": {}})
+        )
+
+    def test_parses_server_rendered_dividend_table(self):
+        headers, rows = StockAnalysisScraper._parse_dividend_html(
+            """
+            <div class="table-wrap"><table>
+              <thead><tr><th>Ex-Dividend Date</th><th>Cash Amount</th></tr></thead>
+              <tbody><tr><td>Sep 1, 2026</td><td>$1.86</td></tr></tbody>
+            </table></div>
+            """
+        )
+        self.assertEqual(headers, ["Ex-Dividend Date", "Cash Amount"])
+        self.assertEqual(
+            rows, [{"Ex-Dividend Date": "Sep 1, 2026", "Cash Amount": "$1.86"}]
+        )
+
+    def test_normalizes_header_fragmented_by_nested_html(self):
+        self.assertEqual(
+            StockAnalysisScraper._normalise_dividend_header("Ex-Div idend Date"),
+            "Ex-Dividend Date",
+        )
+
+    def test_explicit_no_dividend_history_html_is_a_valid_empty_table(self):
+        headers, rows = StockAnalysisScraper._parse_dividend_html(
+            "<title>Netflix Dividend History</title>"
+            "<p>There is no dividend history available for Netflix. "
+            "This usually means that the stock has never paid a dividend.</p>"
+        )
+        self.assertEqual(headers, [])
+        self.assertEqual(rows, [])

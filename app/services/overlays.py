@@ -325,29 +325,52 @@ class OverlayResolver:
         if twr.empty:
             return pd.Series(dtype=float, name="DART")
 
-        # Use portfolio().dividends() — already has total_aed + pay_date resolved
+        # Use portfolio().dividends() — already has total_aed + pay_date resolved.
         p = self._base.hql.portfolio()
         divs_df = p.dividends()
 
-        if divs_df.empty:
-            return twr.rename("DART")
-
-        received = divs_df[divs_df["status"] == "received"].copy()
-        if received.empty:
-            return twr.rename("DART")
-
         trading_days = twr.index  # tz-aware Asia/Dubai
+        daily_divs = pd.Series(0.0, index=trading_days)
+        if not divs_df.empty:
+            received = divs_df[divs_df["status"] == "received"].copy()
+            if not received.empty:
+                received["ts"] = _series_ts_to_dubai(
+                    pd.to_datetime(received["pay_date"], errors="coerce")
+                )
+                daily_divs = (
+                    received.groupby("ts")["total_aed"]
+                    .sum()
+                    .reindex(trading_days, fill_value=0.0)
+                )
 
-        received["ts"] = _series_ts_to_dubai(
-            pd.to_datetime(received["pay_date"], errors="coerce")
+        # Add realized P&L as a separate cumulative DART component. TWR is
+        # intentionally left unchanged; DART is the dividend- and realized-
+        # P&L-adjusted overlay.
+        tx = self._transactions(filters)
+        tickers = tx["ticker"].unique().tolist() if not tx.empty else None
+        realized_df = p.realized_pnl_history(
+            filters.date_range.start,
+            filters.date_range.end,
+            tickers=tickers,
         )
-        daily_divs = (
-            received.groupby("ts")["total_aed"]
-            .sum()
-            .reindex(trading_days, fill_value=0.0)
-        )
+        daily_realized = pd.Series(0.0, index=trading_days)
+        if not realized_df.empty:
+            realized_df["ts"] = _series_ts_to_dubai(
+                pd.to_datetime(realized_df["date"], errors="coerce")
+            )
 
-        dart = (twr + daily_divs.cumsum()).combine_first(twr)
+            def _snap_realized(ts: pd.Timestamp) -> pd.Timestamp:
+                candidates = trading_days[trading_days >= ts]
+                return candidates.min() if len(candidates) else trading_days.max()
+
+            realized_df["ts_snapped"] = realized_df["ts"].apply(_snap_realized)
+            daily_realized = (
+                realized_df.groupby("ts_snapped")["realized_aed"]
+                .sum()
+                .reindex(trading_days, fill_value=0.0)
+            )
+
+        dart = (twr + daily_divs.cumsum() + daily_realized.cumsum()).combine_first(twr)
         return dart.rename("DART")
 
     def _COMPOUND_5(self, filters: PortfolioFilters) -> pd.Series:

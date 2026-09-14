@@ -278,20 +278,22 @@ class AnalyticsModule(BaseModule):
         total_market = sum(p["market_value"] for p in positions)
         total_ret = sum(p["return_aed"] for p in positions)
 
-        return sanitize_for_json({
-            "mode": mode,
-            "positions": positions,
-            "summary": {
-                "total_invested": round(total_invested, 2),
-                "total_market_value": round(total_market, 2),
-                "total_return": round(total_ret, 2),
-                "total_return_pct": (
-                    round(total_ret / total_invested * 100, 2)
-                    if total_invested
-                    else 0.0
-                ),
-            },
-        })
+        return sanitize_for_json(
+            {
+                "mode": mode,
+                "positions": positions,
+                "summary": {
+                    "total_invested": round(total_invested, 2),
+                    "total_market_value": round(total_market, 2),
+                    "total_return": round(total_ret, 2),
+                    "total_return_pct": (
+                        round(total_ret / total_invested * 100, 2)
+                        if total_invested
+                        else 0.0
+                    ),
+                },
+            }
+        )
 
     def get_allocation(
         self,

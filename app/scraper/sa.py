@@ -383,6 +383,7 @@ class StockAnalysisScraper:
         await self._jitter(1.0, 2)
         return result
 
+    @retriable(retries=2, delay=15.0)
     async def _scrape_dividends(
         self, page: Page, exchange: str, symbol: str, is_etf: bool = False
     ) -> Dict[str, Any]:
@@ -394,10 +395,10 @@ class StockAnalysisScraper:
         await self._safe_goto(page, url)
         await self._human_mouse_wander(page)
 
-        try:
-            await page.wait_for_selector(".table-wrap table", timeout=20000)
-        except Exception:
-            await page.wait_for_selector("table", timeout=15000)
+        # The markup has two valid forms on StockAnalysis.  Wait for either in
+        # one attempt, then retry the whole navigation if neither arrives.  A
+        # longer second selector wait only prolonged an anti-bot/error page.
+        table = await page.wait_for_selector(".table-wrap table, table", timeout=30000)
 
         await self._human_scroll(page, passes=4)
         await self._jitter(0.6, 1.2)
@@ -406,10 +407,10 @@ class StockAnalysisScraper:
         rows = []
 
         try:
-            th_els = await page.query_selector_all(".table-wrap table thead th")
+            th_els = await table.query_selector_all("thead th")
             headers = [(await th.inner_text()).strip() for th in th_els]
 
-            tr_els = await page.query_selector_all(".table-wrap table tbody tr")
+            tr_els = await table.query_selector_all("tbody tr")
             for tr in tr_els:
                 tds = await tr.query_selector_all("td")
                 values = [(await td.inner_text()).strip() for td in tds]

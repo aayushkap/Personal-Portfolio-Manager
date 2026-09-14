@@ -136,6 +136,42 @@ class PortfolioReturnsMixin:
             .reset_index(drop=True)
         )
 
+    def realized_pnl_history(
+        self,
+        start_date: date,
+        end_date: date,
+        tickers: list[str] | None = None,
+    ) -> pd.DataFrame:
+        """Return realized P&L grouped by sell date.
+
+        This is the event-shaped counterpart to :meth:`realized_pnl`, intended
+        for chart series that need to add closed-position P&L cumulatively over
+        time rather than only as a period aggregate.
+
+        Returns
+        -------
+        pd.DataFrame
+            Columns: date, realized_aed
+        """
+        empty = pd.DataFrame(columns=["date", "realized_aed"])
+        events = self._realized_events(self.transactions())
+        if events.empty:
+            return empty
+
+        mask = (events["date"] >= start_date) & (events["date"] <= end_date)
+        if tickers:
+            mask &= events["ticker"].isin(tickers)
+        filtered = events[mask]
+        if filtered.empty:
+            return empty
+
+        return (
+            filtered.groupby("date", as_index=False)["realized_aed"]
+            .sum()
+            .sort_values("date")
+            .reset_index(drop=True)
+        )
+
     def twr(
         self,
         start_date: date,

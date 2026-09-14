@@ -49,6 +49,52 @@ class Cache:
             isinstance(s, dict) and "error" in s for s in sections
         )
 
+    @staticmethod
+    def _section_failed(section: Any) -> bool:
+        """Return whether a scraper section carries no usable result.
+
+        An empty ``rows`` list is valid: companies can genuinely have no
+        dividend history.  Conversely, a section set to ``None`` by the
+        scraper orchestration, or a table containing only its captured error,
+        must never replace a previously successful section.
+        """
+        if not isinstance(section, dict) or "error" in section:
+            return True
+
+        rows = section.get("rows")
+        return bool(rows) and all(
+            isinstance(row, dict) and "error" in row for row in rows
+        )
+
+    @classmethod
+    def _preserve_successful_sections(
+        cls, previous: dict[str, Any] | None, incoming: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Keep last-known-good scraped sections when a refresh is partial."""
+        if not isinstance(previous, dict):
+            return incoming
+
+        merged = dict(incoming)
+        for section_name in (
+            "overview",
+            "financials",
+            "dividends",
+            "statistics",
+            "ratios",
+        ):
+            if not cls._section_failed(merged.get(section_name)):
+                continue
+
+            prior_section = previous.get(section_name)
+            if not cls._section_failed(prior_section):
+                merged[section_name] = prior_section
+                logger.warning(
+                    "Keeping last known good %s section during partial refresh",
+                    section_name,
+                )
+
+        return merged
+
     def save(self, ticker_key: str, data: dict[str, Any]) -> bool:
         if self.read_only:
             logger.error("Refusing to write ticker cache from a read-only Cache")
@@ -57,7 +103,10 @@ class Cache:
             logger.warning("Cache skip %s: payload contains error", ticker_key)
             return False
 
-        payload = dict(data)
+        # A ticker refresh is intentionally sectional: source pages can fail
+        # independently.  Merge before publishing so a transient timeout
+        # cannot erase history that powers the dividends ledger.
+        payload = self._preserve_successful_sections(self.load(ticker_key), data)
         payload["last_updated"] = data.get("scraped_at") or dubai_now_iso()
 
         path = self._path(ticker_key)

@@ -239,6 +239,10 @@ class StockAnalysisScraper:
         if response.status_code == 404:
             return None
         response.raise_for_status()
+        # StockAnalysis serves UTF-8 markup without a sufficiently explicit
+        # charset for requests.  Without this, a pound sign becomes ``Â£`` and
+        # the currency parser drops otherwise valid UK dividends.
+        response.encoding = "utf-8"
         return cls._parse_dividend_html(response.text)
 
     async def _safe_goto(

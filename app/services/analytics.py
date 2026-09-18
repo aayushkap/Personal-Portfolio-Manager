@@ -376,9 +376,9 @@ class AnalyticsModule(BaseModule):
                 }
             )
 
-            if pay_date and year_start <= pay_date <= today:
+            if status == "received" and pay_date and year_start <= pay_date <= today:
                 ytd_total += amount
-            if ref_date and q_start <= ref_date <= q_end:
+            if status != "received" and ref_date and q_start <= ref_date <= q_end:
                 q_total += amount
 
         total_received = sum(e["amount"] for e in events if e["status"] == "received")

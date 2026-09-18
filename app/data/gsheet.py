@@ -3,12 +3,18 @@
 import gspread
 import os
 import re
+import threading
+import time
 from contextlib import contextmanager
 from typing import Iterator
 
 from app.config import ACCESS_DIR
+from app.core.logger import get_logger
 from app.data.ticker import TickerInfo, parse_ticker
 from app.utils.time_utils import normalise_date
+
+
+logger = get_logger()
 
 
 class WatchlistConflictError(Exception):
@@ -25,6 +31,14 @@ class GSheet_Manager:
     )
     SPREADSHEET_ID = os.getenv("TXN_SPREADSHEET_ID")
     WATCHLIST_GID = os.getenv("WATCHLIST_SPREADSHEET_ID")
+    DIVIDENDS_GID = os.getenv("DIVIDENDS_SPREADSHEET_ID")
+
+    # Confirmed dividends are entered only occasionally.  Keep the sheet as
+    # the source of truth, but avoid an HTTP request on every API call.
+    _DIVIDENDS_CACHE_TTL_SECONDS = 12 * 60 * 60
+    _dividends_cache: list[dict] | None = None
+    _dividends_cache_at = 0.0
+    _dividends_cache_lock = threading.Lock()
 
     assert SERVICE_ACCOUNT_FILE, SPREADSHEET_ID
 
@@ -74,6 +88,76 @@ class GSheet_Manager:
 
             traceback.print_exc()
             return []
+
+    def fetch_confirmed_dividends(self) -> list[dict]:
+        """Return confirmed broker payments from the dividends sheet.
+
+        The result is intentionally kept in memory only.  The Google Sheet is
+        the source of truth; a long TTL simply prevents normal API traffic from
+        repeatedly opening a Google connection for a ledger updated monthly.
+        """
+        cls = type(self)
+        with cls._dividends_cache_lock:
+            now = time.monotonic()
+            if (
+                cls._dividends_cache is not None
+                and now - cls._dividends_cache_at < cls._DIVIDENDS_CACHE_TTL_SECONDS
+            ):
+                return [dict(row) for row in cls._dividends_cache]
+
+            if not cls.DIVIDENDS_GID:
+                return []
+
+            try:
+                with self._open_sheet() as sh:
+                    ws = self._worksheet_by_gid(sh, cls.DIVIDENDS_GID)
+                    rows = ws.get_all_records()
+                parsed = self._format_confirmed_dividends(rows)
+            except Exception:
+                logger.exception("Failed to fetch confirmed dividends sheet")
+                # A transient Sheets failure must not erase a previously
+                # confirmed receipt during this process's lifetime.
+                return (
+                    [dict(row) for row in cls._dividends_cache]
+                    if cls._dividends_cache is not None
+                    else []
+                )
+
+            cls._dividends_cache = parsed
+            cls._dividends_cache_at = now
+            return [dict(row) for row in parsed]
+
+    @staticmethod
+    def _format_confirmed_dividends(rows: list[dict]) -> list[dict]:
+        """Normalize sheet headers and symbols without changing money values."""
+        result = []
+        for row in rows:
+            ticker = parse_ticker(str(row.get("Symbol", "")).strip().replace(" ", ""))
+            if not ticker:
+                logger.warning(
+                    "Skipping confirmed dividend with invalid symbol: %r", row
+                )
+                continue
+
+            try:
+                received_date = normalise_date(row.get("Date Received"))
+            except ValueError:
+                logger.warning("Skipping confirmed dividend with invalid date: %r", row)
+                continue
+            if not received_date:
+                continue
+
+            result.append(
+                {
+                    "ticker": ticker.key,
+                    "received_date": received_date,
+                    "shares_held": row.get("Shares Held"),
+                    "dividend_per_share": row.get("Dividend per Share"),
+                    "total_dividend": row.get("Total Dividend"),
+                    "tax_paid": row.get("Tax Paid"),
+                }
+            )
+        return result
 
     def _worksheet_by_gid(self, sh, gid: str):
         for ws in sh.worksheets():

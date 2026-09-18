@@ -15,14 +15,14 @@ from pathlib import Path
 from typing import Any
 
 # Permit ``python scripts/rescrape_holdings.py`` from the repository root.
-ROOT_DIR = Path(__file__).resolve().parents[1]
+ROOT_DIR = Path(__file__).resolve().parents[1]  # noqa
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from app.data.cache import Cache
-from app.hql import HQL
-from app.scraper.sa import StockAnalysisScraper
-from app.utils.time_utils import dubai_now_iso
+from app.data.cache import Cache  # noqa
+from app.hql import HQL  # noqa
+from app.scraper.sa import StockAnalysisScraper  # noqa
+from app.utils.time_utils import dubai_now_iso  # noqa
 
 
 def _valid_dividends(value: Any) -> bool:

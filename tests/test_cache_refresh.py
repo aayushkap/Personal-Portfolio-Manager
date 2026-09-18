@@ -115,3 +115,14 @@ class CacheRefreshTests(unittest.TestCase):
         )
         self.assertEqual(headers, [])
         self.assertEqual(rows, [])
+
+    def test_parses_pound_denominated_dividend_amount(self):
+        _, rows = StockAnalysisScraper._parse_dividend_html(
+            """
+            <div class="table-wrap"><table>
+              <thead><tr><th>Ex-Dividend Date</th><th>Cash Amount</th></tr></thead>
+              <tbody><tr><td>Aug 13, 2026</td><td>£0.0268</td></tr></tbody>
+            </table></div>
+            """
+        )
+        self.assertEqual(rows[0]["Cash Amount"], "£0.0268")

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
-from typing import Literal
+from typing import Callable, Literal
 
 import pandas as pd
 
@@ -29,6 +29,7 @@ class PortfolioQuery(PortfolioReturnsMixin):
         cache_repo: CacheRepository,
         price_repo: PriceRepository,
         fx: FXService,
+        confirmed_dividends_loader: Callable[[], list[dict]] | None = None,
     ) -> None:
         self.cache_repo = cache_repo
         self.price_repo = price_repo
@@ -39,6 +40,9 @@ class PortfolioQuery(PortfolioReturnsMixin):
         # transactions()/dividends() many times (e.g. once per position).
         self._transactions_cache: pd.DataFrame | None = None
         self._dividends_cache: dict[date, pd.DataFrame] = {}
+        self._confirmed_dividends_loader = (
+            confirmed_dividends_loader or self._fetch_confirmed_dividends
+        )
 
     # Internal helpers
     def _build_daily_shares(
@@ -277,8 +281,9 @@ class PortfolioQuery(PortfolioReturnsMixin):
             against the shares held at that point in time. A dividend is only
             included if shares were held on the ex-date.
 
-            A dividend is marked 'received' once its pay_date has passed.
-            A dividend is marked 'pending' if the pay_date is in the future or unknown.
+            Scraped dividends are always pending estimates.  A dividend is
+            marked 'received' only after a matching payment is present in the
+            confirmed-dividends Google Sheet.
 
             Parameters
         -
@@ -291,16 +296,64 @@ class PortfolioQuery(PortfolioReturnsMixin):
                 Columns:
                     ticker               — position ticker
                     ex_date              — ex-dividend date
-                    pay_date             — payment date (None if not available)
+                    pay_date             — estimated date, or actual receipt date
                     shares_held          — shares held on the ex-date
                     amount_per_share_aed — dividend per share converted to AED
-                    total_aed            — total income (shares_held × amount_per_share_aed)
+                    total_aed            — expected gross or confirmed net income
                     status               — 'received' or 'pending'
         """
         key = on or date.today()
         if key not in self._dividends_cache:
             self._dividends_cache[key] = self._load_dividends(on)
         return self._dividends_cache[key]
+
+    @staticmethod
+    def _fetch_confirmed_dividends() -> list[dict]:
+        """Load the sheet lazily so non-Sheets test and CLI paths remain usable."""
+        import os
+
+        if not (
+            os.getenv("GOOGLE_SHEETS_SERVICE_ACCOUNT_FILE")
+            and os.getenv("TXN_SPREADSHEET_ID")
+            and os.getenv("DIVIDENDS_SPREADSHEET_ID")
+        ):
+            return []
+
+        from app.data.gsheet import GSheet_Manager
+
+        return GSheet_Manager().fetch_confirmed_dividends()
+
+    def _ticker_currency(self, ticker: str) -> str:
+        try:
+            raw = self.cache_repo.get_raw_ticker(ticker)
+            return self.cache_repo.resolve_currency(raw)
+        except HQLTickerNotFound:
+            return "AED"
+
+    @staticmethod
+    def _confirmed_match_index(
+        expected: list[dict], receipt: dict, used: set[int]
+    ) -> int | None:
+        """Find the nearest unmatched scraped payment for a confirmed receipt."""
+        received_date = parse_date(receipt.get("received_date"))
+        if not received_date:
+            return None
+
+        candidates: list[tuple[int, int]] = []
+        for index, event in enumerate(expected):
+            if index in used or event["ticker"] != receipt.get("ticker"):
+                continue
+            pay_date = event.get("pay_date")
+            if not pay_date:
+                continue
+            delta = (received_date - pay_date).days
+            # Brokers can credit shortly before the announced payment date or
+            # several days late.  Keep this deliberately narrow so different
+            # distributions for the same ticker are not silently combined.
+            if -3 <= delta <= 14:
+                candidates.append((abs(delta), index))
+
+        return min(candidates)[1] if candidates else None
 
     def _load_dividends(self, on: date | None = None) -> pd.DataFrame:
         today = on or date.today()
@@ -317,9 +370,6 @@ class PortfolioQuery(PortfolioReturnsMixin):
                 "status",
             ]
         )
-        if tx.empty:
-            return empty
-
         # Build a running share ledger per ticker sorted by date
         tx = tx.copy()
         sign = tx["transaction"].str.lower().map({"buy": 1, "sell": -1}).fillna(0)
@@ -372,13 +422,70 @@ class PortfolioQuery(PortfolioReturnsMixin):
                         "shares_held": shares_held,
                         "amount_per_share_aed": round(amount_aed, 6),
                         "total_aed": round(shares_held * amount_aed, 2),
-                        "status": (
-                            "received"
-                            if (pay_date and pay_date <= today)
-                            else "pending"
-                        ),
+                        "status": "pending",
                     }
                 )
+
+        # The broker sheet is the only authority for cash actually received.
+        # Merge its rows here so every return/value consumer keeps using this
+        # one canonical ledger and its existing status/total_aed contract.
+        used_expected: set[int] = set()
+        for receipt in self._confirmed_dividends_loader():
+            received_date = parse_date(receipt.get("received_date"))
+            if not received_date or received_date > today:
+                continue
+
+            ticker = str(receipt.get("ticker") or "")
+            if not ticker:
+                continue
+            fallback_currency = self._ticker_currency(ticker)
+            per_share, per_share_currency = parse_money_string(
+                receipt.get("dividend_per_share") or ""
+            )
+            gross, gross_currency = parse_money_string(
+                receipt.get("total_dividend") or ""
+            )
+            tax, tax_currency = parse_money_string(receipt.get("tax_paid") or "")
+            gross_aed = self.fx.to_aed(
+                gross, gross_currency or per_share_currency or fallback_currency
+            )
+            if gross_aed is None:
+                continue
+            tax_aed = self.fx.to_aed(
+                tax or 0.0,
+                tax_currency
+                or gross_currency
+                or per_share_currency
+                or fallback_currency,
+            )
+            net_aed = round(gross_aed - (tax_aed or 0.0), 2)
+            shares_held = parse_number(receipt.get("shares_held"))
+            per_share_aed = self.fx.to_aed(
+                per_share, per_share_currency or gross_currency or fallback_currency
+            )
+
+            match_index = self._confirmed_match_index(rows, receipt, used_expected)
+            confirmed = {
+                "ticker": ticker,
+                "ex_date": None,
+                "pay_date": received_date,
+                "shares_held": shares_held or 0.0,
+                "amount_per_share_aed": round(per_share_aed, 6)
+                if per_share_aed is not None
+                else 0.0,
+                "total_aed": net_aed,
+                "status": "received",
+            }
+            if match_index is None:
+                rows.append(confirmed)
+                continue
+
+            used_expected.add(match_index)
+            expected = rows[match_index]
+            # Keep the scraped ex-date for event context, but use broker facts
+            # for the receipt date, shares, and post-tax cash amount.
+            confirmed["ex_date"] = expected["ex_date"]
+            expected.update(confirmed)
 
         if not rows:
             return empty

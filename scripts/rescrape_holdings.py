@@ -21,7 +21,7 @@ if str(ROOT_DIR) not in sys.path:
 
 from app.data.cache import Cache  # noqa
 from app.hql import HQL  # noqa
-from app.scraper.sa import StockAnalysisScraper  # noqa
+from app.scraper.sa import SourcePageUnavailable, StockAnalysisScraper  # noqa
 from app.utils.time_utils import dubai_now_iso  # noqa
 
 
@@ -33,32 +33,17 @@ def _valid_dividends(value: Any) -> bool:
 
 
 async def _scrape_dividends_only(ticker: dict[str, Any]) -> dict[str, Any]:
-    """Refresh just the dividend history without invoking browser-only pages."""
+    """Refresh dividend history through the persistent browser profile."""
     scraper = StockAnalysisScraper()
-    exchange = ticker["exchange"]
-    symbol = ticker["symbol"]
-    is_etf = scraper._has_etf_tag(ticker.get("tags"))
-    url = f"{scraper._get_base_url(exchange, symbol, is_etf)}/dividend/"
-    extracted = await asyncio.to_thread(scraper._fetch_dividend_html, url)
-    if extracted is None:
-        return scraper._empty_dividends(exchange, symbol, url)
-
-    headers, rows = extracted
-    for row in rows:
-        for field in ("Ex-Dividend Date", "Record Date", "Pay Date"):
-            if field in row:
-                row[field] = scraper._to_iso_date(row[field])
-    return {
-        "symbol": symbol,
-        "exchange": exchange.upper(),
-        "url": url,
-        "scraped_at": dubai_now_iso(),
-        "headers": headers,
-        "rows": rows,
-    }
+    return await scraper.scrape_dividends_only(ticker)
 
 
-async def main(attempts: int, retry_delay: float, dividends_only: bool) -> int:
+async def main(
+    attempts: int,
+    retry_delay: float,
+    min_interval: float,
+    dividends_only: bool,
+) -> int:
     hql = HQL()
     cache = Cache(read_only=False)
     holdings = hql.portfolio().holdings()
@@ -66,6 +51,7 @@ async def main(attempts: int, retry_delay: float, dividends_only: bool) -> int:
 
     print(f"Refreshing {len(tickers)} current holdings serially.", flush=True)
     failures: list[str] = []
+    next_attempt_at = 0.0
 
     for position, ticker in enumerate(tickers, start=1):
         existing = cache.load(ticker) or {}
@@ -87,18 +73,33 @@ async def main(attempts: int, retry_delay: float, dividends_only: bool) -> int:
         }
         saved = False
         for attempt in range(1, attempts + 1):
+            wait_for = next_attempt_at - asyncio.get_running_loop().time()
+            if wait_for > 0:
+                print(
+                    f"[{position}/{len(tickers)}] waiting {wait_for:.0f}s for source pacing",
+                    flush=True,
+                )
+                await asyncio.sleep(wait_for)
+
             print(
                 f"[{position}/{len(tickers)}] {ticker}: scrape attempt {attempt}/{attempts}",
                 flush=True,
             )
             try:
+                # Reserve before every source attempt, including retries, so a
+                # quick 403/429 cannot become a request burst.
+                next_attempt_at = asyncio.get_running_loop().time() + max(
+                    0.0, min_interval
+                )
                 if dividends_only:
                     dividends = await _scrape_dividends_only(ticker_config)
-                    result = {
-                        "ticker": ticker,
-                        "scraped_at": dubai_now_iso(),
-                        "dividends": dividends,
-                    }
+                    # A dividend-only repair must not advance the whole-ticker
+                    # freshness timestamp: the weekday worker still needs to
+                    # repair failed overview/financial sections.
+                    result = dict(existing)
+                    result["ticker"] = ticker
+                    result["dividend_scraped_at"] = dubai_now_iso()
+                    result["dividends"] = dividends
                 else:
                     result = await StockAnalysisScraper().scrape(ticker_config)
                     dividends = result.get("dividends")
@@ -108,8 +109,21 @@ async def main(attempts: int, retry_delay: float, dividends_only: bool) -> int:
                     flush=True,
                 )
                 dividends = None
-                result = {}
-            if _valid_dividends(dividends):
+                result = {
+                    "source_blocked": isinstance(exc, SourcePageUnavailable)
+                    and exc.source_blocked
+                }
+            if result.get("source_blocked"):
+                print(
+                    f"[{position}/{len(tickers)}] {ticker}: source challenge/rate limit; "
+                    "stopping rebuild",
+                    flush=True,
+                )
+                return 2
+            full_result_is_usable = (
+                dividends_only or StockAnalysisScraper.has_usable_result(result)
+            )
+            if _valid_dividends(dividends) and full_result_is_usable:
                 result["purchase_details"] = existing.get("purchase_details") or []
                 if cache.save(ticker, result):
                     print(
@@ -125,7 +139,7 @@ async def main(attempts: int, retry_delay: float, dividends_only: bool) -> int:
                 )
             else:
                 print(
-                    f"[{position}/{len(tickers)}] {ticker}: dividend table unavailable; "
+                    f"[{position}/{len(tickers)}] {ticker}: scrape result incomplete; "
                     "not publishing this scrape",
                     flush=True,
                 )
@@ -149,6 +163,12 @@ if __name__ == "__main__":
     parser.add_argument("--attempts", type=int, default=3)
     parser.add_argument("--retry-delay", type=float, default=60.0)
     parser.add_argument(
+        "--min-interval",
+        type=float,
+        default=15 * 60,
+        help="Minimum seconds between StockAnalysis attempts (default: 900).",
+    )
+    parser.add_argument(
         "--dividends-only",
         action="store_true",
         help="Refresh only dividend history, retaining other cached sections.",
@@ -163,5 +183,12 @@ if __name__ == "__main__":
             print("Another holdings rebuild is already running.", flush=True)
             raise SystemExit(2)
         raise SystemExit(
-            asyncio.run(main(args.attempts, args.retry_delay, args.dividends_only))
+            asyncio.run(
+                main(
+                    args.attempts,
+                    args.retry_delay,
+                    args.min_interval,
+                    args.dividends_only,
+                )
+            )
         )

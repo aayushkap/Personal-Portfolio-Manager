@@ -4,19 +4,47 @@ Returns all data as a single nested dictionary.
 """
 
 import asyncio
+import contextlib
+import os
 import random
 import re
-from typing import Dict, Any
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+from typing import AsyncGenerator, Dict, Any
 from dateutil import parser
 import requests
 from bs4 import BeautifulSoup
-from playwright.async_api import async_playwright, Browser, Page, BrowserContext
-from playwright_stealth import Stealth
+
+# Patchright is a drop-in Playwright build without the CDP automation leaks
+# (Runtime.enable and friends) that Cloudflare's challenge script detects.
+# Stock Playwright never clears the StockAnalysis challenge, even headful.
+from patchright.async_api import (
+    async_playwright,
+    BrowserContext,
+    Page,
+    Playwright,
+    Response,
+)
+from app.config import (
+    STOCKANALYSIS_BROWSER_PROFILE_DIR,
+    STOCKANALYSIS_DEBUG_SCREENSHOT_DIR,
+    STOCKANALYSIS_HEADLESS,
+)
 from app.utils.time_utils import dubai_now_iso
 
 from app.core.logger import get_logger
 
 logger = get_logger()
+
+
+class SourcePageUnavailable(RuntimeError):
+    """The source returned a missing, blocked, or anti-bot page."""
+
+    def __init__(self, message: str, *, source_blocked: bool = False) -> None:
+        super().__init__(message)
+        self.source_blocked = source_blocked
 
 
 def retriable(retries: int = 2, delay: float = 30.0):
@@ -28,6 +56,8 @@ def retriable(retries: int = 2, delay: float = 30.0):
                     return await fn(*args, **kwargs)
                 except Exception as exc:
                     last_exc = exc
+                    if isinstance(exc, SourcePageUnavailable) and exc.source_blocked:
+                        raise
                     if attempt < retries:
                         logger.warning(
                             "%s attempt %d failed: %s — retrying in %.0fs",
@@ -49,34 +79,19 @@ class StockAnalysisScraper:
     Scraper for StockAnalysis.com that collects financial data for a list of tickers.
     """
 
-    # Common user agents and viewports for fingerprint rotation
-    USER_AGENTS = [
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_3_1) AppleWebKit/605.1.15 "
-        "(KHTML, like Gecko) Version/17.3.1 Safari/605.1.15",
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-    ]
-
-    VIEWPORTS = [
-        {"width": 1920, "height": 1080},
-        {"width": 1440, "height": 900},
-        {"width": 1536, "height": 864},
-    ]
-
     def __init__(
         self,
-        headless: bool = True,
+        headless: bool | None = None,
         timeout: int = 45000,
         max_retries: int = 3,
     ):
         """
-        :param headless: Whether to run browser in headless mode
+        :param headless: Whether to run browser in headless mode.  ``None``
+            uses the STOCKANALYSIS_HEADLESS setting.
         :param timeout: Navigation timeout in milliseconds
         :param max_retries: Number of retries for failed navigations
         """
-        self.headless = headless
+        self.headless = STOCKANALYSIS_HEADLESS if headless is None else headless
         self.timeout = timeout
         self.max_retries = max_retries
 
@@ -100,7 +115,12 @@ class StockAnalysisScraper:
     @staticmethod
     async def _human_mouse_wander(page: Page) -> None:
         """Idle mouse movement before scraping."""
-        vp = page.viewport_size or {"width": 1280, "height": 800}
+        # The browser window is not emulated, so read its real dimensions.
+        vp = await page.evaluate(
+            "() => ({width: window.innerWidth, height: window.innerHeight})"
+        )
+        if vp["width"] < 400 or vp["height"] < 400:
+            vp = {"width": 1280, "height": 800}
         for _ in range(random.randint(3, 6)):
             x = random.randint(80, vp["width"] - 80)
             y = random.randint(80, vp["height"] - 200)
@@ -119,13 +139,46 @@ class StockAnalysisScraper:
 
     def _get_base_url(self, exchange: str, symbol: str, is_etf: bool = False) -> str:
         """Determine the Stock Analysis URL for a stock, ETF, or foreign quote."""
-        if is_etf:
+        # StockAnalysis' /etf/ URLs are for US-listed funds.  Foreign ETFs
+        # such as LON:EIMI and LON:XUSE live under their exchange quote URL,
+        # even though their source metadata correctly classifies them as ETFs.
+        us_exchanges = {"NYSE", "NASDAQ", "AMEX", "OTC", "BATS"}
+        if is_etf and exchange.upper() in us_exchanges:
             return f"https://stockanalysis.com/etf/{symbol.lower()}"
 
-        us_exchanges = {"NYSE", "NASDAQ", "AMEX", "OTC", "BATS"}
         if exchange.upper() in us_exchanges:
             return f"https://stockanalysis.com/stocks/{symbol.lower()}"
         return f"https://stockanalysis.com/quote/{exchange.lower()}/{symbol.lower()}"
+
+    async def _save_failure_screenshot(
+        self, page: Page, url: str, response: Response | None = None
+    ) -> Path | None:
+        """Persist the rendered response for a failed source navigation.
+
+        Chromium can capture a page in headless mode, including a 403/challenge
+        response. Wait for the renderer to paint first, then retain its HTML as
+        well: an edge response can otherwise be recorded as a blank frame even
+        when it contains useful diagnostic markup.
+        """
+        try:
+            safe_url = re.sub(r"[^a-z0-9]+", "-", url.lower()).strip("-")
+            filename = f"{dubai_now_iso().replace(':', '-')}-{safe_url[:120]}.png"
+            path = STOCKANALYSIS_DEBUG_SCREENSHOT_DIR / filename
+            path.parent.mkdir(parents=True, exist_ok=True)
+            await page.wait_for_timeout(1_000)
+            await page.screenshot(path=str(path), full_page=True, timeout=15_000)
+            html_path = path.with_suffix(".html")
+            html_path.write_text(await page.content(), encoding="utf-8")
+            logger.warning(
+                "Saved StockAnalysis failure artifacts: screenshot=%s html=%s status=%s",
+                path,
+                html_path,
+                response.status if response else "unavailable",
+            )
+            return path
+        except Exception:
+            logger.exception("Could not save StockAnalysis failure screenshot for %s", url)
+            return None
 
     @staticmethod
     def _has_etf_tag(tags: Any) -> bool:
@@ -157,6 +210,37 @@ class StockAnalysisScraper:
             if isinstance(value, str) and value.strip().lower() in no_dividend_values:
                 return True
         return False
+
+    @staticmethod
+    def _section_is_usable(section_name: str, section: Any) -> bool:
+        """Whether a section contains source data rather than a failed shell."""
+        if not isinstance(section, dict) or section.get("error"):
+            return False
+
+        if section_name == "overview":
+            return bool(section.get("symbol")) and bool(section.get("stats"))
+        if section_name == "statistics":
+            return bool(section.get("sections"))
+
+        rows = section.get("rows")
+        if not isinstance(rows, list):
+            return False
+        return not any(isinstance(row, dict) and row.get("error") for row in rows)
+
+    @classmethod
+    def has_usable_result(cls, result: Any) -> bool:
+        """Require a valid overview plus one other successful source section."""
+        if not isinstance(result, dict) or result.get("error"):
+            return False
+
+        if not cls._section_is_usable("overview", result.get("overview")):
+            return False
+
+        section_names = ("dividends", "financials", "statistics", "ratios")
+        return any(
+            cls._section_is_usable(section_name, result.get(section_name))
+            for section_name in section_names
+        )
 
     @staticmethod
     def _empty_dividends(exchange: str, symbol: str, url: str) -> Dict[str, Any]:
@@ -230,7 +314,9 @@ class StockAnalysisScraper:
         response = requests.get(
             url,
             headers={
-                "User-Agent": random.choice(cls.USER_AGENTS),
+                # Retained only for compatibility with one-off callers.  The
+                # scheduled scraper uses the persistent browser profile below.
+                "User-Agent": "Mozilla/5.0",
                 "Accept-Language": "en-US,en;q=0.9",
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             },
@@ -238,6 +324,11 @@ class StockAnalysisScraper:
         )
         if response.status_code == 404:
             return None
+        if response.status_code in {403, 429}:
+            raise SourcePageUnavailable(
+                f"source returned HTTP {response.status_code} for {url}",
+                source_blocked=True,
+            )
         response.raise_for_status()
         # StockAnalysis serves UTF-8 markup without a sufficiently explicit
         # charset for requests.  Without this, a pound sign becomes ``Â£`` and
@@ -247,15 +338,61 @@ class StockAnalysisScraper:
 
     async def _safe_goto(
         self, page: Page, url: str, wait_for: str = "domcontentloaded"
-    ) -> None:
-        """Navigate with retries and human pacing."""
+    ) -> Response:
+        """Navigate with retries and reject missing or anti-bot source pages."""
         for attempt in range(self.max_retries):
+            response: Response | None = None
             try:
-                await page.goto(url, wait_until=wait_for, timeout=self.timeout)
+                response = await page.goto(
+                    url, wait_until=wait_for, timeout=self.timeout
+                )
+                if response is None:
+                    raise SourcePageUnavailable(f"no navigation response for {url}")
+                if await self._is_challenge_page(page):
+                    # Cloudflare serves its check with HTTP 403.  A real
+                    # browser clears it unattended within a few seconds and
+                    # reloads the requested page with a clearance cookie.
+                    logger.info("Cloudflare check on %s — waiting for it to clear", url)
+                    if not await self._wait_for_challenge(page):
+                        raise SourcePageUnavailable(
+                            f"Cloudflare challenge did not clear for {url}",
+                            source_blocked=True,
+                        )
+                    logger.info("Cloudflare check cleared for %s", url)
+                elif response.status >= 400:
+                    raise SourcePageUnavailable(
+                        f"source returned HTTP {response.status} for {url}",
+                        source_blocked=response.status in {403, 429},
+                    )
+
+                title = (await page.title()).strip().lower()
+                body = (await page.locator("body").inner_text(timeout=5000)).lower()
+                blocked_markers = (
+                    "access denied",
+                    "captcha",
+                    "verify you are human",
+                    "just a moment",
+                    "unusual traffic",
+                )
+                missing_title_markers = ("404", "page not found", "not found")
+                if any(marker in body for marker in blocked_markers) or any(
+                    marker in title for marker in missing_title_markers
+                ):
+                    raise SourcePageUnavailable(
+                        f"source page unavailable for {url}",
+                        source_blocked=any(
+                            marker in body for marker in blocked_markers
+                        ),
+                    )
+
                 # await page.screenshot(f"{url}.png")
                 await self._jitter(1.0, 2)
-                return
+                return response
             except Exception as exc:
+                if isinstance(exc, SourcePageUnavailable):
+                    await self._save_failure_screenshot(page, url, response)
+                if isinstance(exc, SourcePageUnavailable) and exc.source_blocked:
+                    raise
                 if attempt == self.max_retries - 1:
                     raise
                 wait = random.uniform(3, 7)
@@ -264,36 +401,98 @@ class StockAnalysisScraper:
                 )
                 await asyncio.sleep(wait)
 
-    # Context creation with stealth and fingerprint spoofing
-    async def _create_context(self, browser: Browser) -> BrowserContext:
-        """Create a new browser context with random user agent and viewport, plus stealth init scripts."""
-        ua = random.choice(self.USER_AGENTS)
-        vp = random.choice(self.VIEWPORTS)
+    @staticmethod
+    async def _is_challenge_page(page: Page) -> bool:
+        """Whether the page is Cloudflare's "Just a moment..." interstitial."""
+        try:
+            title = (await page.title()).strip().lower()
+            if "just a moment" in title:
+                return True
+            return await page.locator("#challenge-error-text").count() > 0
+        except Exception:
+            return False
 
-        context = await browser.new_context(
-            user_agent=ua,
-            viewport=vp,
-            locale="en-US",
-            timezone_id="Asia/Dubai",
-            java_script_enabled=True,
-            extra_http_headers={
-                "Accept-Language": "en-US,en;q=0.9",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Referer": "https://www.google.com/",
-            },
+    async def _wait_for_challenge(self, page: Page, timeout: int = 45000) -> bool:
+        """Let the browser clear a Cloudflare check; True once the real page loads."""
+        try:
+            await page.wait_for_function(
+                "() => !document.title.toLowerCase().includes('just a moment')"
+                " && !document.querySelector('#challenge-error-text')",
+                timeout=timeout,
+            )
+            await page.wait_for_load_state("domcontentloaded", timeout=self.timeout)
+        except Exception:
+            return False
+        return not await self._is_challenge_page(page)
+
+    @staticmethod
+    @contextlib.asynccontextmanager
+    async def _virtual_display(enabled: bool) -> AsyncGenerator[dict[str, str], None]:
+        """Provide an X display for a headful browser on a monitor-less server.
+
+        Cloudflare rejects headless Chromium regardless of its headers, so the
+        browser runs with a real window.  Linux servers without ``DISPLAY`` get
+        a private Xvfb screen for the browser only; desktops use their own.
+        """
+        env = dict(os.environ)
+        if not enabled or sys.platform != "linux" or env.get("DISPLAY"):
+            yield env
+            return
+        if shutil.which("Xvfb") is None:
+            raise RuntimeError(
+                "Xvfb is required for the headful StockAnalysis browser; "
+                "install it (apt install xvfb) or set STOCKANALYSIS_HEADLESS=true"
+            )
+
+        read_fd, write_fd = os.pipe()
+        xvfb = subprocess.Popen(
+            [
+                "Xvfb",
+                "-displayfd",
+                str(write_fd),
+                "-screen",
+                "0",
+                "1920x1080x24",
+                "-nolisten",
+                "tcp",
+            ],
+            pass_fds=(write_fd,),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
+        os.close(write_fd)
+        try:
+            with os.fdopen(read_fd) as display_pipe:
+                display = await asyncio.wait_for(
+                    asyncio.to_thread(display_pipe.readline), timeout=15
+                )
+            if not display.strip():
+                raise RuntimeError("Xvfb exited before reporting a display")
+            env["DISPLAY"] = f":{display.strip()}"
+            yield env
+        finally:
+            xvfb.terminate()
+            try:
+                xvfb.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                xvfb.kill()
 
-        await Stealth().apply_stealth_async(context)
+    async def _launch_context(
+        self, pw: Playwright, env: dict[str, str]
+    ) -> BrowserContext:
+        """Launch the persistent profile as an unmodified, real browser.
 
-        # Spoof additional fingerprint signals
-        await context.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-            Object.defineProperty(navigator, 'plugins',   { get: () => [1, 2, 3, 4, 5] });
-            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-            window.chrome = { runtime: {} };
-            """)
-
-        return context
+        Do not add stealth scripts, a user-agent override, or viewport
+        emulation: each makes the JavaScript fingerprint disagree with the
+        browser binary, which is precisely what Cloudflare checks for.
+        """
+        return await pw.chromium.launch_persistent_context(
+            str(STOCKANALYSIS_BROWSER_PROFILE_DIR),
+            headless=self.headless,
+            no_viewport=True,
+            env=env,
+            timeout=self.timeout,
+        )
 
     # Page‑specific scraping methods
     @retriable(retries=2, delay=30.0)
@@ -501,37 +700,6 @@ class StockAnalysisScraper:
 
         logger.info(f"Scraping dividends for ticker: \t {exchange}:{symbol}")
 
-        # StockAnalysis renders this table in its response HTML.  Its browser
-        # page is occasionally challenged or omits the table in headless
-        # Chromium even when the server response is valid, so prefer the much
-        # faster static path.  A real 404 is a successful empty history.
-        try:
-            extracted = await asyncio.to_thread(self._fetch_dividend_html, url)
-            if extracted is None:
-                logger.info("%s:%s has no dividend page", exchange, symbol)
-                return self._empty_dividends(exchange, symbol, url)
-
-            headers, rows = extracted
-            for row in rows:
-                for field in ("Ex-Dividend Date", "Record Date", "Pay Date"):
-                    if field in row:
-                        row[field] = self._to_iso_date(row[field])
-            return {
-                "symbol": symbol,
-                "exchange": exchange.upper(),
-                "url": url,
-                "scraped_at": dubai_now_iso(),
-                "headers": headers,
-                "rows": rows,
-            }
-        except Exception as exc:
-            logger.warning(
-                "%s:%s direct dividend fetch failed (%s); using browser fallback",
-                exchange,
-                symbol,
-                exc,
-            )
-
         await self._safe_goto(page, url)
         await self._human_mouse_wander(page)
 
@@ -649,7 +817,7 @@ class StockAnalysisScraper:
 
             # Flat views
             data["all_stats"] = {
-                k: v["raw"]
+                k: v
                 for section in data["sections"].values()
                 for k, v in section.items()
             }
@@ -742,26 +910,14 @@ class StockAnalysisScraper:
 
     # Ticker‑level orchestration
     async def _scrape_ticker(
-        self, browser: Browser, ticker: Dict[str, str]
+        self, context: BrowserContext, ticker: Dict[str, str]
     ) -> Dict[str, Any]:
         exchange = ticker["exchange"]
         symbol = ticker["symbol"]
         key = f"{exchange.upper()}:{symbol}"
         is_etf = self._has_etf_tag(ticker.get("tags"))
 
-        context = await self._create_context(browser)
         page = await context.new_page()
-
-        await page.route(
-            "**/*.{png,jpg,jpeg,gif,svg,woff,woff2,ttf,mp4,webm}",
-            lambda route: route.abort(),
-        )
-        await page.route(
-            re.compile(
-                r"(google-analytics|googletagmanager|facebook\.net|doubleclick)"
-            ),
-            lambda route: route.abort(),
-        )
 
         result = {
             "ticker": key,
@@ -792,6 +948,7 @@ class StockAnalysisScraper:
                 ]
             )
 
+        source_blocked = False
         for section_name, scrape_fn in sections:
             try:
                 if section_name == "dividends" and self._overview_confirms_no_dividends(
@@ -810,18 +967,20 @@ class StockAnalysisScraper:
                     await self._jitter(1.5, 2.0)
             except Exception as exc:
                 logger.warning("%s > %s failed: %s", key, section_name, exc)
-                result[section_name] = None
+                result[section_name] = {"error": str(exc)}
+                if isinstance(exc, SourcePageUnavailable) and exc.source_blocked:
+                    source_blocked = True
+                    break
 
-        # Ticker is only fully failed if EVERY section errored
-        all_failed = all(
-            isinstance(result.get(s), dict) and "error" in result.get(s, {})
-            for s, _ in sections
-        )
-        if all_failed:
-            result["error"] = "all sections failed"
+        # Do not publish a ticker after a source-wide block or an incomplete run.
+        if source_blocked:
+            result["source_blocked"] = True
+            result["error"] = "source challenge or rate limit"
+        elif not self.has_usable_result(result):
+            result["error"] = "no usable source sections"
 
         try:
-            await context.close()
+            await page.close()
         except Exception:
             pass
 
@@ -837,30 +996,38 @@ class StockAnalysisScraper:
         Scrape tickers and return a dictionary with results. The dictionary has ticker keys (e.g. 'DFM:DEWA') containing the scraped data.
         """
 
-        async with async_playwright() as pw:
-            browser = await pw.chromium.launch(
-                headless=self.headless,
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--no-sandbox",
-                    "--disable-setuid-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-accelerated-2d-canvas",
-                    "--no-first-run",
-                    "--no-zygote",
-                    "--disable-gpu",
-                ],
-            )
+        async with self._virtual_display(
+            not self.headless
+        ) as env, async_playwright() as pw:
+            context = await self._launch_context(pw, env)
+            try:
+                return await self._scrape_ticker(context, ticker)
+            finally:
+                await context.close()
 
-            ticker_result = await self._scrape_ticker(browser, ticker)
-            await browser.close()
+    async def scrape_dividends_only(self, ticker: dict) -> Dict[str, Any]:
+        """Fetch dividends through the same persistent browser profile."""
+        exchange = ticker["exchange"]
+        symbol = ticker["symbol"]
+        is_etf = self._has_etf_tag(ticker.get("tags"))
 
-        return ticker_result
+        async with self._virtual_display(
+            not self.headless
+        ) as env, async_playwright() as pw:
+            context = await self._launch_context(pw, env)
+            try:
+                page = await context.new_page()
+                try:
+                    return await self._scrape_dividends(page, exchange, symbol, is_etf)
+                finally:
+                    await page.close()
+            finally:
+                await context.close()
 
 
 async def main():
-    obj = StockAnalysisScraper(headless=False)
-    res = await obj.scrape({"exchange": "NASDAQ", "symbol": "MSFT"})
+    obj = StockAnalysisScraper()
+    res = await obj.scrape({"exchange": "NASDAQ", "symbol": "ZETA"})
     import json
 
     with open("filename.json", "w") as f:

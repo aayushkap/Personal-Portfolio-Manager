@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 from app.data.cache import Cache
 from app.scraper.sa import StockAnalysisScraper
@@ -87,6 +88,33 @@ class CacheRefreshTests(unittest.TestCase):
             StockAnalysisScraper._overview_confirms_no_dividends({"stats": {}})
         )
 
+    def test_full_refresh_requires_usable_overview_and_another_section(self):
+        self.assertTrue(
+            StockAnalysisScraper.has_usable_result(
+                {
+                    "overview": {"symbol": "MCD", "stats": {"Market Cap": "1B"}},
+                    "dividends": {"headers": [], "rows": []},
+                }
+            )
+        )
+        self.assertFalse(
+            StockAnalysisScraper.has_usable_result(
+                {
+                    "overview": {"symbol": "MCD", "stats": {}},
+                    "dividends": {"headers": ["Cash Amount"], "rows": []},
+                }
+            )
+        )
+        self.assertFalse(
+            StockAnalysisScraper.has_usable_result(
+                {
+                    "overview": {"symbol": "MCD", "stats": {"Market Cap": "1B"}},
+                    "dividends": {"error": "challenge page"},
+                    "financials": {"error": "challenge page"},
+                }
+            )
+        )
+
     def test_parses_server_rendered_dividend_table(self):
         headers, rows = StockAnalysisScraper._parse_dividend_html(
             """
@@ -126,3 +154,22 @@ class CacheRefreshTests(unittest.TestCase):
             """
         )
         self.assertEqual(rows[0]["Cash Amount"], "£0.0268")
+
+    @patch("app.scraper.sa.STOCKANALYSIS_DEBUG_SCREENSHOT_DIR")
+    def test_source_failure_screenshot_is_available_in_headless_mode(self, directory):
+        directory.__truediv__.side_effect = lambda filename: Path(
+            self.temp_dir.name
+        ) / filename
+        page = type("Page", (), {"screenshot": AsyncMock()})()
+
+        import asyncio
+
+        path = asyncio.run(
+            StockAnalysisScraper()._save_failure_screenshot(
+                page, "https://stockanalysis.com/stocks/zeta/"
+            )
+        )
+
+        self.assertIsNotNone(path)
+        page.screenshot.assert_awaited_once()
+        self.assertTrue(str(path).endswith(".png"))

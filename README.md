@@ -291,6 +291,67 @@ Outside market hours:
 3. Sleep briefly after success, longer after failure, or much longer when the
    week's work is complete.
 
+### StockAnalysis pacing and refresh validity
+
+The weekday runner retains the OHLC-then-fundamentals order above.  Every
+queued StockAnalysis ticker attempt has a process-wide minimum start-to-start
+interval.  The default is 15 minutes and can be changed with
+`FUNDAMENTALS_MIN_INTERVAL_SECONDS`.  This permits 192 attempts in a 48-hour
+weekend while leaving the weekday OHLC cadence intact.
+
+The scraper validates HTTP status, missing-page titles, and common anti-bot
+pages before accepting browser content.  A ticker is considered refreshed only
+when its overview has usable statistics and at least one additional source
+section succeeded.  Partial results retain last-known-good sections but do not
+advance the weekly freshness timestamp, so they are retried instead of being
+silently skipped until the following week.
+
+An HTTP 403/429 or challenge page opens a source-wide cooldown (one hour by
+default, configurable with `FUNDAMENTALS_SOURCE_COOLDOWN_SECONDS`) so the
+worker stops sending subsequent tickers into the same block.  The manual
+rebuild stops immediately for the same signal.
+
+All scheduled and dividend-only reads use a persistent Playwright profile at
+`cache/stockanalysis-browser-profile` by default.  This retains the source's
+ordinary cookies and storage between serial runs rather than presenting a new,
+random browser identity for every ticker.  Set
+`STOCKANALYSIS_BROWSER_PROFILE_DIR` to relocate it.
+
+StockAnalysis sits behind Cloudflare, which blocks headless Chromium and the
+CDP automation signals of stock Playwright.  The scraper therefore drives
+[Patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright-python) (a
+drop-in Playwright build without those leaks) as an unmodified, headful
+browser: no stealth scripts, user-agent override, or viewport emulation.  On a
+Linux host without `DISPLAY` it starts a private Xvfb screen for the browser,
+so the server needs `xvfb` installed and the Patchright browser downloaded:
+
+```bash
+sudo apt install xvfb
+venv/bin/pip install -r requirements.txt
+venv/bin/patchright install chromium
+```
+
+`STOCKANALYSIS_HEADLESS` defaults to `false`; `true` is only useful for
+debugging, since Cloudflare challenges every headless request.
+
+The one-off holdings rebuild uses the same conservative pacing.  Its
+`--min-interval` option defaults to 900 seconds; dividend-only repairs do not
+advance a ticker's full-fundamentals freshness timestamp.
+
+### Manual rescrapes
+
+`POST /rescrape` accepts `{"ticker": "LSE:EIMI"}` and returns `202 Accepted`.
+It creates a durable, coalesced request that the existing scheduled worker
+notices within 30 seconds.  The request has priority over the normal drip
+queue and bypasses a ticker's individual failure cooldown, but never bypasses
+the process-wide StockAnalysis pacing or a source-wide block.  API workers only
+write the request marker: the scheduled worker remains the only process that
+launches Playwright or writes ticker cache data.
+
+StockAnalysis uses `/etf/<symbol>/` only for US-listed funds.  ETFs listed on
+other exchanges are scraped from their normal exchange quote URL (for example,
+`/quote/lon/EIMI/`), while still skipping company-only financial sections.
+
 The in-process job lock keeps OHLC and fundamentals work from overlapping. The
 process-wide lock guarantees that only one copy of this entire runner exists.
 

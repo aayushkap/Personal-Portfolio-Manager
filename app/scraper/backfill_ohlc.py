@@ -5,6 +5,7 @@ from app.config import BENCHMARKS
 from app.data.db import DB
 from app.data.gsheet import GSheet_Manager
 from app.scraper.ohlc import _set_ohlc
+from app.services.watchlist_ai import WatchlistAIScreener
 from app.utils.time_utils import dubai_today
 
 MIN_ROWS = 50_00
@@ -22,11 +23,14 @@ def _is_stale(latest_timestamp: str | None, today: date | None = None) -> bool:
     return latest_date < (today or dubai_today()) - timedelta(days=STALE_AFTER_DAYS)
 
 
-def _required_instruments() -> dict[str, tuple[str, str]]:
+def _required_instruments(
+    watchlist_items: list[dict] | None = None,
+) -> dict[str, tuple[str, str]]:
     """Return every OHLC storage key that is still used by the application."""
     sheets = GSheet_Manager()
     portfolio_items = sheets.fetch_transactions()
-    watchlist_items = sheets.fetch_watchlist()
+    if watchlist_items is None:
+        watchlist_items = sheets.fetch_watchlist()
 
     # The sheet client reports failures as an empty list.  Do not mistake a
     # transient Google Sheets failure for an intentionally empty portfolio and
@@ -69,24 +73,50 @@ def _remove_stale_ohlc(db: DB, required_symbols: set[str]) -> list[str]:
     return stale_symbols
 
 
+def _remove_alerts_without_conditions(watchlist_items: list[dict]) -> list[str]:
+    """Remove persisted AI alerts whose watchlist Criteria cell is now empty."""
+    tickers_with_conditions = {
+        str(item.get("ticker") or "").strip()
+        for item in watchlist_items
+        if item.get("criteria")
+    }
+    screener = WatchlistAIScreener()
+    stored = screener.read()
+    alerts = stored.get("alerts", [])
+    retained = []
+    removed = []
+    for alert in alerts:
+        ticker = str(alert.get("ticker") or "").strip()
+        if ticker in tickers_with_conditions:
+            retained.append(alert)
+        else:
+            removed.append(ticker)
+
+    if removed:
+        screener._persist(retained)
+
+    return removed
+
+
 async def main():
     DB.bootstrap()
     db = DB(read_only=False)
-    required = _required_instruments()
+    watchlist_items = GSheet_Manager().fetch_watchlist()
+    required = _required_instruments(watchlist_items)
     print(f"Found {len(required)} required symbols")
+    removed_alerts = _remove_alerts_without_conditions(watchlist_items)
+    print(f"Removed {len(removed_alerts)} AI alerts without conditions")
     stale = _remove_stale_ohlc(db, set(required))
     print(f"Removed {len(stale)} stale symbols")
 
     with db.connection() as conn:
         row_stats = {
             row["symbol"]: (row["row_count"], row["latest_timestamp"])
-            for row in conn.execute(
-                """
+            for row in conn.execute("""
                 SELECT symbol, COUNT(*) AS row_count, MAX(timestamp) AS latest_timestamp
                 FROM ohlc
                 GROUP BY symbol
-                """
-            )
+                """)
         }
         short = [
             (storage_key, exchange, symbol)

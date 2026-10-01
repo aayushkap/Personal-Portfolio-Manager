@@ -15,6 +15,7 @@ from app.api.watchlist import router as watchlist
 from app.api.metadata import router as metadata
 from app.api.quote import router as quote
 from app.api.system import router as system
+from app.api.rescrape import router as rescrape
 from app.core.logger import get_logger
 
 load_dotenv()
@@ -31,6 +32,7 @@ app.include_router(watchlist)
 app.include_router(metadata)
 app.include_router(quote)
 app.include_router(system)
+app.include_router(rescrape)
 
 app.add_middleware(
     CORSMiddleware,

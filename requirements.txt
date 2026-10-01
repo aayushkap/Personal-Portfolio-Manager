@@ -28,8 +28,7 @@ pandas
 peewee
 pillow
 platformdirs
-playwright
-playwright-stealth
+patchright
 protobuf
 pyasn1
 pyasn1_modules

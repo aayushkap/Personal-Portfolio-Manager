@@ -15,6 +15,7 @@ from app.scraper.ohlc import _set_ohlc
 from app.scraper.sa import StockAnalysisScraper
 from app.data.gsheet import GSheet_Manager
 from app.data.cache import Cache
+from app.data.rescrape_queue import RescrapeQueue, RescrapeRequest
 from app.data.fx import fetch_and_save_fx
 from app.services.quote import QuoteStore
 from app.services.watchlist import WatchlistModule
@@ -34,6 +35,48 @@ _scrape_failures: dict[str, int] = defaultdict(int)
 _FAILURE_COOLDOWN_SECS = 6 * 60 * 60  # 6 hours after 3 consecutive failures
 _FAILURE_THRESHOLD = 3
 _scrape_cooldown_until: dict[str, float] = {}
+_next_fundamentals_scrape_at = 0.0
+_source_cooldown_until = 0.0
+
+
+def _fundamentals_seconds_until_next_scrape() -> float:
+    """Return remaining process-wide source cooldown, never below zero."""
+    now = time.monotonic()
+    return max(
+        0.0,
+        _next_fundamentals_scrape_at - now,
+        _source_cooldown_until - now,
+    )
+
+
+def _reserve_fundamentals_scrape_slot() -> float:
+    """Reserve the next SA slot and return its minimum start-to-start spacing."""
+    global _next_fundamentals_scrape_at
+    interval = max(0, app.config.FUNDAMENTALS_MIN_INTERVAL_SECONDS)
+    _next_fundamentals_scrape_at = time.monotonic() + interval
+    return interval
+
+
+def _open_source_circuit() -> float:
+    """Pause all SA work when the site signals a rate limit or challenge."""
+    global _source_cooldown_until
+    cooldown = max(0, app.config.FUNDAMENTALS_SOURCE_COOLDOWN_SECONDS)
+    _source_cooldown_until = time.monotonic() + cooldown
+    return cooldown
+
+
+def _quarantine_source_blocked_ticker(ticker: str) -> float:
+    """Prevent one blocked ticker from pinning the priority queue.
+
+    A 403/429 is normally source-wide, so opening the source circuit is the
+    primary response. The same ticker must also be skipped on the next source
+    attempt; otherwise a first-priority new/updated ticker is selected again
+    indefinitely whenever the source circuit expires.
+    """
+    _scrape_failures[ticker] += 1
+    until = time.time() + _FAILURE_COOLDOWN_SECS
+    _scrape_cooldown_until[ticker] = until
+    return until
 
 
 def _current_week_key() -> tuple[int, int]:
@@ -53,7 +96,11 @@ def _week_key_from_scraped_at(scraped_at: str | None) -> tuple[int, int] | None:
 
 
 def _was_scraped_this_week(cached_data: dict | None) -> bool:
-    if not cached_data:
+    # A timestamp alone is not freshness.  Older partial runs were published
+    # despite empty/challenge sections, which left tickers such as MCD skipped
+    # for the rest of the week.  Keep those tickers due until a usable result
+    # has actually been collected.
+    if not cached_data or not StockAnalysisScraper.has_usable_result(cached_data):
         return False
     return (
         _week_key_from_scraped_at(cached_data.get("scraped_at")) == _current_week_key()
@@ -248,11 +295,15 @@ async def fundamentals_drip_job() -> str:
     Returns:
         "scraped" -> a ticker was successfully scraped
         "failed"  -> a ticker was attempted but failed/timed out
-        "idle"    -> nothing is due this week
+        "idle"         -> nothing is due this week
+        "rate_limited" -> a previous source attempt is still being paced
+        "rescrape_rate_limited" -> a manual request is waiting for that pace
     """
     async with _job_lock:
         logger.info("Fundamentals drip starting | now=%s", dubai_now().isoformat())
         try:
+            rescrape_queue = RescrapeQueue()
+            requested_rescrape = rescrape_queue.next()
             gs = GSheet_Manager()
             transactions = gs.fetch_transactions()
             watchlist = gs.fetch_watchlist()
@@ -325,7 +376,21 @@ async def fundamentals_drip_job() -> str:
 
             target_key: str | None = None
 
-            if missing_tickers:
+            manual_rescrape: RescrapeRequest | None = None
+            if requested_rescrape:
+                if requested_rescrape.ticker not in all_info:
+                    # The instrument was removed from both sheets after the UI
+                    # queued it, so it can never be resolved by this worker.
+                    logger.warning(
+                        "Discarding rescrape request for unknown ticker: %s",
+                        requested_rescrape.ticker,
+                    )
+                    rescrape_queue.discard(requested_rescrape)
+                    return "idle"
+                target_key = requested_rescrape.ticker
+                manual_rescrape = requested_rescrape
+                logger.info("Priority 0 — manual rescrape: %s", target_key)
+            elif missing_tickers:
                 target_key = missing_tickers[0]
                 logger.info("Priority 1 — new ticker: %s", target_key)
             elif updated_tickers:
@@ -343,8 +408,21 @@ async def fundamentals_drip_job() -> str:
                 logger.info("No fundamentals work due this week.")
                 return "idle"
 
+            remaining = _fundamentals_seconds_until_next_scrape()
+            if remaining:
+                logger.info(
+                    "Fundamentals source pacing | next attempt in %.0fs", remaining
+                )
+                return "rescrape_rate_limited" if requested_rescrape else "rate_limited"
+
             info = all_info[target_key]
             obj = StockAnalysisScraper()
+            interval = _reserve_fundamentals_scrape_slot()
+            logger.info(
+                "Fundamentals source slot reserved | ticker=%s min_interval=%.0fs",
+                target_key,
+                interval,
+            )
 
             try:
                 scrape = await asyncio.wait_for(
@@ -357,6 +435,23 @@ async def fundamentals_drip_job() -> str:
                     ),
                     timeout=480,
                 )
+                if scrape.get("source_blocked"):
+                    cooldown = _open_source_circuit()
+                    ticker_cooldown_until = _quarantine_source_blocked_ticker(
+                        target_key
+                    )
+                    logger.error(
+                        "StockAnalysis blocked %s; source circuit open for %.0fs "
+                        "and ticker quarantined for %.0fh",
+                        target_key,
+                        cooldown,
+                        max(0, ticker_cooldown_until - time.time()) / 3600,
+                    )
+                    if manual_rescrape:
+                        rescrape_queue.discard(manual_rescrape)
+                    return "rate_limited"
+                if not obj.has_usable_result(scrape):
+                    raise RuntimeError("scrape returned no usable source sections")
                 scrape["purchase_details"] = purchases_map[target_key]
                 cache.save(target_key, scrape)
                 logger.info("Fundamentals saved: %s", target_key)
@@ -364,6 +459,8 @@ async def fundamentals_drip_job() -> str:
                 # Reset failure tracking on success
                 _scrape_failures.pop(target_key, None)
                 _scrape_cooldown_until.pop(target_key, None)
+                if manual_rescrape:
+                    rescrape_queue.discard(manual_rescrape)
                 return "scraped"
 
             except asyncio.TimeoutError:
@@ -388,6 +485,8 @@ async def fundamentals_drip_job() -> str:
                 existing = cache.load(target_key) or {}
                 existing["purchase_details"] = purchases_map[target_key]
                 cache.save(target_key, existing)
+                if manual_rescrape:
+                    rescrape_queue.discard(manual_rescrape)
                 return "failed"
 
             except Exception:
@@ -407,6 +506,8 @@ async def fundamentals_drip_job() -> str:
 
                 existing["purchase_details"] = purchases_map[target_key]
                 cache.save(target_key, existing)
+                if manual_rescrape:
+                    rescrape_queue.discard(manual_rescrape)
                 return "failed"
 
         except Exception:
@@ -421,13 +522,25 @@ def run_holdings_news_check():
 # Job Runner — single continuous loop, the ONLY place OHLC + drip are called
 
 
-async def _sleep_or_stop(stop_event: asyncio.Event, seconds: float) -> bool:
-    """Sleep until the next cycle, unless shutdown is requested first."""
-    try:
-        await asyncio.wait_for(stop_event.wait(), timeout=seconds)
-        return True
-    except asyncio.TimeoutError:
-        return False
+async def _sleep_or_stop(
+    stop_event: asyncio.Event, seconds: float, *, wake_for_rescrape: bool = True
+) -> bool:
+    """Sleep until the next cycle, waking promptly for a manual rescrape."""
+    deadline = time.monotonic() + seconds
+    while not stop_event.is_set():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=min(30, remaining))
+            return True
+        except asyncio.TimeoutError:
+            # The filesystem queue is the cross-process signal from API
+            # workers.  Polling it here lets an idle worker react within 30s
+            # without ever launching another worker or scraper in the API.
+            if wake_for_rescrape and RescrapeQueue().has_pending():
+                return False
+    return True
 
 
 async def job_runner(stop_event: asyncio.Event):
@@ -467,15 +580,23 @@ async def job_runner(stop_event: asyncio.Event):
                     elapsed,
                     sleep_for,
                 )
-                if await _sleep_or_stop(stop_event, sleep_for):
+                if await _sleep_or_stop(
+                    stop_event,
+                    sleep_for,
+                    wake_for_rescrape=drip_status != "rescrape_rate_limited",
+                ):
                     break
 
             else:
                 logger.info("Job runner: off-hours — checking fundamentals work")
                 drip_status = await fundamentals_drip_job()
 
-                if drip_status == "scraped":
-                    sleep_for = 30
+                if drip_status in {
+                    "scraped",
+                    "rate_limited",
+                    "rescrape_rate_limited",
+                }:
+                    sleep_for = max(30, _fundamentals_seconds_until_next_scrape())
                 elif drip_status == "failed":
                     sleep_for = 15 * 60
                 else:
@@ -487,7 +608,11 @@ async def job_runner(stop_event: asyncio.Event):
                     drip_status,
                     sleep_for,
                 )
-                if await _sleep_or_stop(stop_event, sleep_for):
+                if await _sleep_or_stop(
+                    stop_event,
+                    sleep_for,
+                    wake_for_rescrape=drip_status != "rescrape_rate_limited",
+                ):
                     break
 
         except asyncio.CancelledError:

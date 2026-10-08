@@ -11,6 +11,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import AsyncGenerator, Dict, Any
 from dateutil import parser
@@ -37,6 +38,8 @@ from app.utils.time_utils import dubai_now_iso
 from app.core.logger import get_logger
 
 logger = get_logger()
+
+_BROWSER_CACHE_CLEANUP_INTERVAL_SECONDS = 48 * 60 * 60
 
 
 class SourcePageUnavailable(RuntimeError):
@@ -177,7 +180,9 @@ class StockAnalysisScraper:
             )
             return path
         except Exception:
-            logger.exception("Could not save StockAnalysis failure screenshot for %s", url)
+            logger.exception(
+                "Could not save StockAnalysis failure screenshot for %s", url
+            )
             return None
 
     @staticmethod
@@ -494,7 +499,45 @@ class StockAnalysisScraper:
             timeout=self.timeout,
         )
 
+    @staticmethod
+    def _clear_browser_cache_if_due() -> None:
+        """Clear disposable caches daily, only after the browser closes."""
+        profile = STOCKANALYSIS_BROWSER_PROFILE_DIR
+        marker = profile / ".cache-cleaned-at"
+        try:
+            # Chromium owns the profile while this lock exists. Even dangling
+            # locks are left alone rather than risking a live browser's files.
+            lock = profile / "SingletonLock"
+            if lock.exists() or lock.is_symlink():
+                return
+            if not profile.is_dir() or (profile / "Default").is_symlink():
+                return
+            if marker.exists() and (
+                time.time() - marker.stat().st_mtime
+                < _BROWSER_CACHE_CLEANUP_INTERVAL_SECONDS
+            ):
+                return
+            for name in ("Cache", "Code Cache"):
+                cache = profile / "Default" / name
+                if cache.is_dir() and not cache.is_symlink():
+                    shutil.rmtree(cache)
+            marker.touch()
+            logger.info("Cleared daily StockAnalysis browser caches in %s", profile)
+        except OSError:
+            # Cleanup must not discard a completed scrape; retry next session.
+            logger.warning(
+                "Could not clear StockAnalysis browser caches", exc_info=True
+            )
+
     # Page‑specific scraping methods
+    @staticmethod
+    def _quote_currency_from_text(text: str) -> str | None:
+        # London listings may say "Currency is GBP · Price in GBX" or USD.
+        match = re.search(r"\bPrice in\s+([A-Z]{3})\b", text)
+        if match is None:
+            match = re.search(r"\bCurrency is\s+([A-Z]{3})\b", text)
+        return match.group(1) if match else None
+
     @retriable(retries=2, delay=30.0)
     async def _scrape_overview(
         self, page: Page, exchange: str, symbol: str, is_etf: bool = False
@@ -514,6 +557,12 @@ class StockAnalysisScraper:
             # "url": url,
             # "scraped_at": dubai_now_iso(),
         }
+
+        quote_currency = self._quote_currency_from_text(
+            await page.locator("body").inner_text()
+        )
+        if quote_currency:
+            data["quote_currency"] = quote_currency
 
         # Price and change
         price_el = await page.query_selector("[data-test='quote-price']")
@@ -996,14 +1045,16 @@ class StockAnalysisScraper:
         Scrape tickers and return a dictionary with results. The dictionary has ticker keys (e.g. 'DFM:DEWA') containing the scraped data.
         """
 
-        async with self._virtual_display(
-            not self.headless
-        ) as env, async_playwright() as pw:
+        async with (
+            self._virtual_display(not self.headless) as env,
+            async_playwright() as pw,
+        ):
             context = await self._launch_context(pw, env)
             try:
                 return await self._scrape_ticker(context, ticker)
             finally:
                 await context.close()
+                await asyncio.to_thread(self._clear_browser_cache_if_due)
 
     async def scrape_dividends_only(self, ticker: dict) -> Dict[str, Any]:
         """Fetch dividends through the same persistent browser profile."""
@@ -1011,9 +1062,10 @@ class StockAnalysisScraper:
         symbol = ticker["symbol"]
         is_etf = self._has_etf_tag(ticker.get("tags"))
 
-        async with self._virtual_display(
-            not self.headless
-        ) as env, async_playwright() as pw:
+        async with (
+            self._virtual_display(not self.headless) as env,
+            async_playwright() as pw,
+        ):
             context = await self._launch_context(pw, env)
             try:
                 page = await context.new_page()
@@ -1023,6 +1075,7 @@ class StockAnalysisScraper:
                     await page.close()
             finally:
                 await context.close()
+                await asyncio.to_thread(self._clear_browser_cache_if_due)
 
 
 async def main():

@@ -130,7 +130,11 @@ class TickerQuery:
             "currency": "AED",
         }
 
-    def overview(self) -> dict:
+    def native_currency(self) -> str | None:
+        """Return the recorded quote currency; unknown metadata stays unknown."""
+        return self.cache_repo.resolve_currency(self.raw(), default=None)
+
+    def overview(self, *, native: bool = False) -> dict:
         """
         Return a curated snapshot of overview metrics.
 
@@ -169,6 +173,8 @@ class TickerQuery:
         stats = _overview_stats(raw)
         currency = self.cache_repo.resolve_currency(raw)
 
+        convert = (lambda value, currency: value) if native else self.fx.to_aed
+
         # ETF overview pages use a small set of different labels. Normalize
         # those inputs here while preserving the public overview() schema.
         market_cap_raw = stats.get("Market Cap") or stats.get("Assets")
@@ -179,20 +185,18 @@ class TickerQuery:
         net_income = parse_mixed_stat(stats.get("Net Income"))
         eps = parse_mixed_stat(stats.get("EPS"))
         target = parse_price_target(stats.get("Price Target"))
-        open_px = self.fx.to_aed(parse_any_stat(stats.get("Open")), currency)
-        prev_close = self.fx.to_aed(
-            parse_any_stat(stats.get("Previous Close")), currency
-        )
+        open_px = convert(parse_any_stat(stats.get("Open")), currency)
+        prev_close = convert(parse_any_stat(stats.get("Previous Close")), currency)
         dlow, dhigh = parse_range(stats.get("Day's Range"))
         wlow, whigh = parse_range(stats.get("52-Week Range"))
         if wlow is None:
             wlow = parse_any_stat(stats.get("52-Week Low"))
         if whigh is None:
             whigh = parse_any_stat(stats.get("52-Week High"))
-        dlow = self.fx.to_aed(dlow, currency)
-        dhigh = self.fx.to_aed(dhigh, currency)
-        wlow = self.fx.to_aed(wlow, currency)
-        whigh = self.fx.to_aed(whigh, currency)
+        dlow = convert(dlow, currency)
+        dhigh = convert(dhigh, currency)
+        wlow = convert(wlow, currency)
+        whigh = convert(whigh, currency)
 
         dividend_raw = str(
             stats.get("Dividend") or stats.get("Dividend (ttm)") or ""
@@ -238,7 +242,7 @@ class TickerQuery:
             "week_52_high": whigh,
             "beta": parse_any_stat(stats.get("Beta")),
             "analyst_rating": stats.get("Analysts"),
-            "price_target": self.fx.to_aed(target["value"], currency),
+            "price_target": convert(target["value"], currency),
             "price_target_upside": target["upside"],
         }
 
@@ -265,9 +269,11 @@ class TickerQuery:
         start: date | str | None = None,
         end: date | str | None = None,
         granularity: str = "1D",
+        *,
+        native: bool = False,
     ) -> pd.Series:
         """
-        Return daily close prices in AED.
+        Return daily close prices in AED, or source units when native=True.
 
         Output schema:
             pd.Series
@@ -277,7 +283,7 @@ class TickerQuery:
         """
         start_date, end_date = _coerce_date_range(days=days, start=start, end=end)
         return self.price_repo.get_ohlcv(
-            self.ticker, start_date, end_date, granularity=granularity
+            self.ticker, start_date, end_date, granularity=granularity, native=native
         )
 
     def ohlcv(
@@ -286,9 +292,11 @@ class TickerQuery:
         start: date | str | None = None,
         end: date | str | None = None,
         granularity: str = "1D",
+        *,
+        native: bool = False,
     ) -> pd.DataFrame:
         """
-        Return daily OHLCV bars in AED.
+        Return daily OHLCV bars in AED, or source units when native=True.
 
         Output schema:
             pd.DataFrame
@@ -302,6 +310,7 @@ class TickerQuery:
             start_date,
             end_date,
             granularity=granularity,
+            native=native,
         )
 
     def dividends(self) -> pd.DataFrame:

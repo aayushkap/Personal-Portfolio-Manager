@@ -51,10 +51,6 @@ class WatchlistModule(BaseModule):
                 if cur:
                     currency_map[ticker] = cur
 
-        for ticker in prices.columns:
-            currency = currency_map.get(ticker, "AED")
-            prices[ticker] *= self.fx.get(currency, 1.0)
-
         rows = [
             row
             for item in items
@@ -106,8 +102,8 @@ class WatchlistModule(BaseModule):
         ticker = item["ticker"]
 
         raw_price = self.get_latest_price(ticker)
-        currency = currency_map.get(ticker, "AED")
-        current_price = raw_price * self.fx.get(currency, 1.0) if raw_price else None
+        currency = currency_map.get(ticker)
+        current_price = raw_price
 
         col = prices.get(ticker) if isinstance(prices, pd.DataFrame) else None
 
@@ -124,7 +120,9 @@ class WatchlistModule(BaseModule):
         # prevent the rest of the watchlist from being returned.
         overview = {}
         try:
-            overview = self.hql.ticker(ticker).overview()
+            query = self.hql.ticker(ticker)
+            overview = query.overview(native=True)
+            currency = query.native_currency()
         except HQLTickerNotFound:
             logger.info(
                 "Skipping overview data for watchlist ticker absent from cache: %s",
@@ -141,6 +139,7 @@ class WatchlistModule(BaseModule):
 
         return {
             "ticker": ticker,
+            "currency": currency,
             "name": item.get("name") or meta.get("name") or ticker,
             "exchange": item.get("exchange") or meta.get("exchange"),
             "sector": item.get("sector") or meta.get("sector"),
@@ -183,16 +182,23 @@ class WatchlistModule(BaseModule):
         today = date.today()
         portfolio = self.hql.portfolio()
         info = self.hql.ticker(ticker).info()
-        overlay_map = self._build_overlays(ticker, timeframe, today, overlays or [])
+        currency = self.hql.ticker(ticker).native_currency()
+        chart_native = HoldingsModule._chart_is_native(overlays or [])
+        overlay_map = self._build_overlays(
+            ticker, timeframe, today, overlays or [], native=chart_native
+        )
 
         detail = {
             "ticker": ticker,
-            "chart": self._build_chart(ticker, timeframe, today),
+            "currency": currency,
+            "chart_currency": currency if chart_native else "AED",
+            "chart": self._build_chart(ticker, timeframe, today, native=chart_native),
             "overlays": overlay_map,
             "transactions": HoldingsModule._build_transactions(
                 self, ticker, today, portfolio
             ),
             "fundamentals": self._build_fundamentals(ticker),
+            "raw_data": self.hql.ticker(ticker).raw(),
             "last_updated": info.get("last_updated"),
         }
 
@@ -251,10 +257,14 @@ class WatchlistModule(BaseModule):
 
     # Reuse the same chart + fundamentals from HoldingsModule
     # Import and call directly to avoid duplicating the logic
-    def _build_chart(self, ticker: str, timeframe: str, today: date) -> list[dict]:
+    def _build_chart(
+        self, ticker: str, timeframe: str, today: date, *, native: bool = True
+    ) -> list[dict]:
         from app.services.holdings import HoldingsModule
 
-        return HoldingsModule._build_chart(self, ticker, timeframe, today)
+        return HoldingsModule._build_chart(
+            self, ticker, timeframe, today, native=native
+        )
 
     def _build_fundamentals(self, ticker: str) -> dict:
         from app.services.holdings import HoldingsModule
@@ -262,8 +272,16 @@ class WatchlistModule(BaseModule):
         return HoldingsModule._build_fundamentals(self, ticker)
 
     def _build_overlays(
-        self, ticker: str, timeframe: str, today: date, overlays: list[str]
+        self,
+        ticker: str,
+        timeframe: str,
+        today: date,
+        overlays: list[str],
+        *,
+        native: bool = True,
     ) -> dict[str, list[dict]]:
         from app.services.holdings import HoldingsModule
 
-        return HoldingsModule._build_overlays(self, ticker, timeframe, today, overlays)
+        return HoldingsModule._build_overlays(
+            self, ticker, timeframe, today, overlays, native=native
+        )

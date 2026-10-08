@@ -56,7 +56,9 @@ class HoldingsModule(BaseModule):
         price_frames = []
         for ticker in tickers:
             t = self.hql.ticker(ticker)
-            history = t.prices(start=today - timedelta(days=120), end=today)
+            history = t.prices(
+                start=today - timedelta(days=120), end=today, native=True
+            )
             if history is None or history.empty:
                 continue
 
@@ -93,7 +95,7 @@ class HoldingsModule(BaseModule):
             if card:
                 results.append(card)
 
-        results = sorted(results, key=lambda x: x["total_value"] or 0, reverse=True)
+        results = sorted(results, key=lambda x: x["total_value_aed"] or 0, reverse=True)
         results = HoldingsNewsAgent().merge_news(results)
 
         return results
@@ -108,14 +110,21 @@ class HoldingsModule(BaseModule):
         p = self.hql.portfolio()
         today = date.today()
         info = self.hql.ticker(ticker).info()
-        overlay_map = self._build_overlays(ticker, timeframe, today, overlays or [])
+        currency = self.hql.ticker(ticker).native_currency()
+        chart_native = HoldingsModule._chart_is_native(overlays or [])
+        overlay_map = self._build_overlays(
+            ticker, timeframe, today, overlays or [], native=chart_native
+        )
 
         return {
             "ticker": ticker,
-            "chart": self._build_chart(ticker, timeframe, today),
+            "currency": currency,
+            "chart_currency": currency if chart_native else "AED",
+            "chart": self._build_chart(ticker, timeframe, today, native=chart_native),
             "overlays": overlay_map,
             "transactions": self._build_transactions(ticker, today, p),
             "fundamentals": self._build_fundamentals(ticker),
+            "raw_data": self.hql.ticker(ticker).raw(),
             "last_updated": info.get("last_updated"),
             "news": HoldingsNewsAgent().merge_news([{"ticker": ticker}]),
         }
@@ -155,30 +164,40 @@ class HoldingsModule(BaseModule):
 
         t = self.hql.ticker(ticker)
         info = t.info()
+        currency = t.native_currency()
+        native_price = _safe(self.get_latest_price(ticker))
         earnings_date = t.overview().get("earnings_date")
 
         return {
             "ticker": ticker,
+            "currency": currency,
             "name": info.get("name") or ticker,
             "sector": info.get("sector"),
             "exchange": info.get("exchange"),
             "logo_url": info.get("logo_url"),
             "shares": round(shares, 6),
-            "current_price": _safe(current_price),
-            "cost_basis": _safe(cost_basis),
-            "total_value": _safe(market_value),
-            "total_return": _safe(total_return),
+            "current_price": native_price,
+            "current_price_aed": _safe(current_price),
+            "cost_basis": self._native_amount(cost_basis, "AED", currency, 2),
+            "cost_basis_aed": _safe(cost_basis),
+            "total_value": round(shares * native_price, 2)
+            if native_price is not None
+            else None,
+            "total_value_aed": _safe(market_value),
+            "total_return": self._native_amount(total_return, "AED", currency, 2),
+            "total_return_aed": _safe(total_return),
             "total_return_pct": _safe(_pct(market_value + cum_divs, cost_basis)),
             "dod_pct": _safe(
-                self._pct_change_over_window(current_price, prices, ticker, today, 1)
+                self._pct_change_over_window(native_price, prices, ticker, today, 1)
             ),
             "mom_pct": _safe(
-                self._pct_change_over_window(current_price, prices, ticker, today, 30)
+                self._pct_change_over_window(native_price, prices, ticker, today, 30)
             ),
             "three_month_pct": _safe(
-                self._pct_change_over_window(current_price, prices, ticker, today, 90)
+                self._pct_change_over_window(native_price, prices, ticker, today, 90)
             ),
-            "cumulative_divs": round(cum_divs, 2),
+            "cumulative_divs": self._native_amount(cum_divs, "AED", currency, 2),
+            "cumulative_divs_aed": round(cum_divs, 2),
             "yoc_pct": _safe(yoc),
             "earnings_nearby": _earnings_nearby(earnings_date, today),
             "sparkline": self._build_sparkline(ticker, prices, today),
@@ -186,13 +205,13 @@ class HoldingsModule(BaseModule):
 
     def _pct_change_over_window(
         self,
-        current_price: float,
+        current_price: Optional[float],
         prices: pd.DataFrame,
         ticker: str,
         today: date,
         days: int,
     ) -> Optional[float]:
-        if ticker not in prices.columns:
+        if current_price is None or ticker not in prices.columns:
             return None
         col = prices[ticker].dropna()
         distinct = col.loc[
@@ -225,6 +244,8 @@ class HoldingsModule(BaseModule):
         ticker: str,
         timeframe: str,
         today: date,
+        *,
+        native: bool = True,
     ) -> list[dict]:
         config = HoldingsModule._timeframe_config(timeframe)
         days_back = config["days_back"]
@@ -236,6 +257,7 @@ class HoldingsModule(BaseModule):
             start=start,
             end=today,
             granularity=config["granularity"],
+            native=native,
         )
 
         if ohlcv is None or (hasattr(ohlcv, "empty") and ohlcv.empty):
@@ -259,6 +281,8 @@ class HoldingsModule(BaseModule):
         timeframe: str,
         today: date,
         overlays: list[str],
+        *,
+        native: bool = True,
     ) -> dict[str, list[dict]]:
         if not overlays:
             return {}
@@ -293,7 +317,12 @@ class HoldingsModule(BaseModule):
                     # value across the *entire* displayed range instead of
                     # only appearing once `window` bars accumulate inside it.
                     own_close_full = HoldingsModule._overlay_ticker_series(
-                        self, ticker, date(2000, 1, 1), end, config["granularity"]
+                        self,
+                        ticker,
+                        date(2000, 1, 1),
+                        end,
+                        config["granularity"],
+                        native=native,
                     )
                 series = resolve_technical(normalized, own_close_full)
                 if not series.empty:
@@ -313,6 +342,11 @@ class HoldingsModule(BaseModule):
                 )
 
         return result
+
+    @staticmethod
+    def _chart_is_native(overlays: list[str]) -> bool:
+        """Cross-instrument charts share AED; own price indicators use native units."""
+        return all(is_technical_key(key.upper()) for key in overlays)
 
     @staticmethod
     def _timeframe_config(timeframe: str) -> dict:
@@ -348,10 +382,16 @@ class HoldingsModule(BaseModule):
         ]
 
     def _overlay_ticker_series(
-        self, ticker: str, start: date, end: date, granularity: str
+        self,
+        ticker: str,
+        start: date,
+        end: date,
+        granularity: str,
+        *,
+        native: bool = False,
     ) -> pd.Series:
         t = self.hql.ticker(ticker)
-        df = t.prices(start=start, end=end, granularity=granularity)
+        df = t.prices(start=start, end=end, granularity=granularity, native=native)
         if df is None or (hasattr(df, "empty") and df.empty):
             return pd.Series(dtype=float, name=ticker)
         if isinstance(df, pd.DataFrame):
@@ -371,6 +411,7 @@ class HoldingsModule(BaseModule):
         p,
     ) -> list[dict]:
         records = []
+        currency = self.hql.ticker(ticker).native_currency()
 
         tx = p.transactions()
         ticker_tx = tx[tx["ticker"] == ticker].sort_values("date")
@@ -385,9 +426,14 @@ class HoldingsModule(BaseModule):
                         else str(row["date"])
                     ),
                     "type": tx_type,
+                    "currency": currency,
                     "shares": round(float(row["shares"] or 0), 6),
-                    "price": _safe(round(float(row["price_aed"] or 0), 4)),
-                    "total": _safe(round(float(row["total_cost_aed"] or 0), 2)),
+                    "price": HoldingsModule._native_amount(
+                        self, row["price"], row["currency"], currency, 4
+                    ),
+                    "total": HoldingsModule._native_amount(
+                        self, row["total_cost"], row["currency"], currency, 2
+                    ),
                 }
             )
 
@@ -405,19 +451,30 @@ class HoldingsModule(BaseModule):
                     {
                         "date": event_date.isoformat(),
                         "type": "DIVIDEND",
+                        "currency": currency,
                         "shares": round(float(div["shares_held"]), 6),
-                        "price": _safe(round(float(div["amount_per_share_aed"]), 4)),
-                        "total": _safe(round(float(div["total_aed"]), 2)),
+                        "price": HoldingsModule._native_amount(
+                            self, div["amount_per_share_aed"], "AED", currency, 4
+                        ),
+                        "total": HoldingsModule._native_amount(
+                            self, div["total_aed"], "AED", currency, 2
+                        ),
                     }
                 )
 
         return sorted(records, key=lambda x: x["date"])
 
+    def _native_amount(
+        self, value: float | None, source: str | None, target: str | None, digits: int
+    ) -> float | None:
+        value = self.hql.fx.convert(_safe(value), source, target)
+        return round(value, digits) if value is not None else None
+
     def _build_fundamentals(self, ticker: str) -> dict:
         result = {}
         t = self.hql.ticker(ticker)
 
-        ov = t.overview()
+        ov = t.overview(native=True)
         if ov:
             if ov.get("about"):
                 result["about"] = ov["about"]
@@ -561,6 +618,14 @@ class HoldingsModule(BaseModule):
                 }.items()
                 if v is not None
             }
+
+        dividends = t.raw().get("dividends")
+        if not isinstance(dividends, dict):
+            dividends = {}
+        result["dividends"] = {
+            "headers": dividends.get("headers") or [],
+            "rows": dividends.get("rows") or [],
+        }
 
         result["growth_trends"] = _parse_growth_trends(t.financials())
         result["ratio_trends"] = _parse_ratio_trends(t.ratios())

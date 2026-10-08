@@ -312,10 +312,17 @@ worker stops sending subsequent tickers into the same block.  The manual
 rebuild stops immediately for the same signal.
 
 All scheduled and dividend-only reads use a persistent Playwright profile at
-`cache/stockanalysis-browser-profile` by default.  This retains the source's
+`cache/stockanalysis-browser-profile-patchright` by default.  This retains the source's
 ordinary cookies and storage between serial runs rather than presenting a new,
 random browser identity for every ticker.  Set
 `STOCKANALYSIS_BROWSER_PROFILE_DIR` to relocate it.
+
+The scraper clears Chromium's HTTP and compiled-code caches once every 24
+hours, after closing the browser.  The cleanup timestamp is stored in the
+profile's `.cache-cleaned-at` file and survives worker restarts.  Cookies,
+local storage, and portfolio data are preserved.  This applies to both local
+and server runs, including dividend-only reads; no separate cron job is needed.
+If the scraper is idle, cleanup waits until its next completed browser session.
 
 StockAnalysis sits behind Cloudflare, which blocks headless Chromium and the
 CDP automation signals of stock Playwright.  The scraper therefore drives
@@ -444,6 +451,23 @@ Copying only `portfolio.db` while writes are active can omit recent committed
 data.
 
 ## Service management and deployment
+
+Individual holdings and watchlist responses use the instrument's native quote
+units for prices, charts, indicators, and detail transaction amounts.  The
+`currency` field identifies those units, including `GBX` for pence.  Standalone
+detail charts use that currency; when comparison overlays are requested, the
+main chart and its price indicators use AED together (`chart_currency: "AED"`).
+Portfolio aggregates remain in AED.  Holding cards also expose explicit
+`*_aed` monetary fields and continue to sort by `total_value_aed`.
+
+The scraper records `overview.quote_currency` from the source's price unit.
+Older caches fall back to transaction currency; if neither is available,
+`currency` is null until a subsequent scrape supplies it.  Native chart prices
+are still returned without guessing a currency or requiring an exchange rate.
+
+Both detail endpoints include dividend history under
+`fundamentals.dividends.headers` and `fundamentals.dividends.rows`, retaining
+the source's dates and cash-amount strings.  Missing histories return empty lists.
 
 ### Local development
 

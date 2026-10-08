@@ -21,6 +21,22 @@ class FXService:
             return None
         return value * self._rates.get(currency or "AED", 1.0)
 
+    def convert(
+        self, value: float | None, source: str | None, target: str | None
+    ) -> float | None:
+        """Convert display amounts without guessing unknown currencies or rates."""
+        if value is None or not source or not target:
+            return None
+        if source == target:
+            return value
+        if {source, target} == {"GBP", "GBX"}:
+            return value * 100 if target == "GBX" else value / 100
+        source_rate = self._rates.get(source)
+        target_rate = self._rates.get(target)
+        if not source_rate or not target_rate:
+            return None
+        return value * source_rate / target_rate
+
 
 class CacheRepository:
     def __init__(self, cache: Cache) -> None:
@@ -40,10 +56,13 @@ class CacheRepository:
             for path in Path(self._cache.cache_dir).glob("*.json")
         ]
 
-    def resolve_currency(self, raw: dict) -> str:
+    def resolve_currency(self, raw: dict, default: str | None = "AED") -> str | None:
         """
         Infer ticker currency from purchase_details cost strings.
         """
+        quote_currency = (raw.get("overview") or {}).get("quote_currency")
+        if quote_currency:
+            return str(quote_currency).upper()
         details = raw.get("purchase_details") or []
         for detail in details:
             _, currency = parse_money_string(detail.get("cost_per_share") or "")
@@ -53,7 +72,9 @@ class CacheRepository:
             if currency:
                 return currency
 
-        return "AED"
+        overview = raw.get("overview") or {}
+        currency = raw.get("currency") or overview.get("currency")
+        return str(currency).upper() if currency else default
 
 
 class PriceRepository:
@@ -68,6 +89,8 @@ class PriceRepository:
         start: date,
         end: date,
         granularity: str = "1D",
+        *,
+        native: bool = False,
     ) -> pd.DataFrame:
         rows = self._db.get(ticker, limit=50_000)
         expected = ["symbol", "timestamp", "close", "volume", "ts"]
@@ -105,9 +128,11 @@ class PriceRepository:
         except HQLTickerNotFound:
             currency = "AED"
 
-        df["close"] = pd.to_numeric(df["close"], errors="coerce").map(
-            lambda v: self._fx.to_aed(v, currency) if pd.notna(v) else pd.NA
-        )
+        df["close"] = pd.to_numeric(df["close"], errors="coerce")
+        if not native:
+            df["close"] = df["close"].map(
+                lambda v: self._fx.to_aed(v, currency) if pd.notna(v) else pd.NA
+            )
         df["volume"] = pd.to_numeric(df["volume"], errors="coerce").fillna(0)
 
         df = df.sort_values("ts").set_index("ts")

@@ -20,7 +20,6 @@ h11
 httpcore
 httpx
 idna
-investiny
 multitasking
 numpy
 oauthlib
@@ -61,5 +60,5 @@ yf
 yfinance
 tradingview-datafeed
 scipy
-google-genai
+google-genai>=1.26.0
 psutil

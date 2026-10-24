@@ -71,4 +71,4 @@ def get_watchlist_module() -> WatchlistModule:
 
 @lru_cache(maxsize=1)
 def get_system_module() -> SystemModule:
-    return SystemModule()
+    return SystemModule(db=get_db())

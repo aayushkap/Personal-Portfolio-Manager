@@ -4,8 +4,7 @@ SystemModule
 Reads live host machine metrics (CPU, RAM, disk, battery/power, network,
 temperature, top processes) for the "Data Center" system health dashboard.
 
-No Cache/DB dependency — this reads directly from the OS via psutil,
-so unlike other modules it's instantiated with no constructor args.
+Host metrics come from psutil; LLM usage is read from the shared SQLite DB.
 
 IMPORTANT: psutil's cpu_percent() and Process.cpu_percent() both work by
 comparing against a *previous* sample. The very first call in a process's
@@ -25,12 +24,17 @@ from pathlib import Path
 
 import psutil
 
+from app.core.logger import get_logger
+from app.data.db import DB
+from app.data.llm_usage import LLMUsageStore
+
 LOG_DIR = Path("/home/akap/app/app/logs")
 LOG_LINES = 200
 
 
 class SystemModule:
-    def __init__(self):
+    def __init__(self, db: DB | None = None):
+        self.llm_usage = LLMUsageStore(db)
         # Prime the baseline — first call always returns 0/garbage.
         psutil.cpu_percent(interval=None)
         psutil.cpu_percent(interval=None, percpu=True)
@@ -59,7 +63,18 @@ class SystemModule:
             "top_processes": self._get_top_processes(limit=8),
             "worker_log": self._get_log(LOG_DIR / "worker.log"),
             "api_log": self._get_log(LOG_DIR / "api.log"),
+            "llm": self.get_llm_metrics(),
         }
+
+    def get_llm_metrics(self, *, limit: int = 50, offset: int = 0) -> dict:
+        try:
+            return self.llm_usage.metrics(limit=limit, offset=offset)
+        except Exception:
+            get_logger().exception("Could not read LLM metrics")
+            return {
+                "available": False,
+                "error": "LLM metrics unavailable; check database bootstrap and logs",
+            }
 
     @staticmethod
     def _get_log(path: Path) -> str:

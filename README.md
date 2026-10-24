@@ -114,10 +114,55 @@ only responsible for preparing an API worker to serve requests.
 | Quote | Gemini | `cache/quote.json` | Scheduled worker | API workers |
 | Watchlist alerts | Google Sheets, fundamentals, and Gemini | `cache/watchlist_alerts.json` | Scheduled worker | API workers |
 | Holdings news | Holdings data, news sources, and Gemini | `cache/holdings_news.json` | Scheduled worker | API workers |
+| LLM invocation metrics | Shared Gemini wrapper | `llm_invocations` table in `cache/portfolio.db` | Scheduled worker | System API |
 
 The database and all of its WAL files must be on a local filesystem attached to
 the same server. SQLite WAL mode must not be used on NFS or another network
 filesystem.
+
+### LLM invocation metrics
+
+All three generation services (quotes, watchlist screening, and holdings news)
+call `GeminiLLM.generate_content` in `app/services/llm.py`. It records one row in
+`llm_invocations` per SDK invocation, including failed calls. Each row contains
+the UTC start time, operation, model, optional ticker, duration, outcome, token
+counts, applied pricing, and estimated token cost in USD. Provider errors are
+recorded by exception type; prompts and generated content are not stored.
+`success` means the provider returned a response, including blocked responses
+or output that later fails JSON parsing. SDK-internal HTTP retries are part of
+that invocation rather than separate rows.
+
+`POST /system/health` includes these metrics under `llm`. For just the metrics,
+use `POST /system/llm?limit=50&offset=0`. Both responses include:
+
+- `available`: whether the metrics table could be read.
+- `totals`: all-time invocation/failure counts, token counts, estimated token
+  cost, and `unpriced_invocations`.
+- `by_operation_model`: the same totals grouped by operation and model.
+- `recent`: invocation rows, newest first, with their pricing snapshots.
+
+The dedicated endpoint accepts `limit` from 1 to 500 and a nonnegative `offset`
+to page through all recorded invocations. Pagination does not change totals.
+Usage starts when this instrumentation is installed; earlier calls cannot be
+reconstructed from existing cache files.
+
+Gemini reports usage, not an invoice amount. The estimate charges uncached input
+and tool-use prompt tokens at the input rate, cached input at its discounted
+rate, and output plus thinking tokens at the output rate. Rates live in
+`TOKEN_PRICES`: Gemini 2.5 Flash uses Google's standard paid text rates; Gemini
+3.7 Flash uses the user-supplied introductory rates ($0.75 input and $3.75 output
+per million tokens). These estimates exclude search grounding, cache storage,
+free-tier allowances, discounts, and taxes. Unknown pricing or absent usage
+produces a null cost; totals sum known costs and report the unpriced count.
+Applied rates are saved per invocation, so price changes do not alter history.
+
+The usage fields require `google-genai>=1.26.0`. The unused `investiny`
+requirement was removed because it pins an incompatible older `httpx` version.
+Before starting updated services, install requirements and run
+`python -m app.data.bootstrap` to add the table to an existing database. Normal
+API reads never create or migrate schema. If the table is unavailable, health
+still returns host metrics with `llm.available=false`. A recording failure is
+logged without discarding the provider response or masking its exception.
 
 ## Application startup, end to end
 

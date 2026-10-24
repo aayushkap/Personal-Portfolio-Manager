@@ -47,19 +47,22 @@ class CacheRefreshTests(unittest.TestCase):
         self.assertEqual(saved["dividends"], self.previous_dividends)
         self.assertEqual(saved["last_updated"], "2026-09-14T00:00:00+04:00")
 
-    def test_empty_successful_dividend_table_replaces_previous_history(self):
-        replacement = {"symbol": "MCD", "rows": []}
+    def test_empty_successful_dividend_table_keeps_paid_history(self):
+        # An empty table (e.g. "no TTM dividend") does not un-pay past events;
+        # history accumulates and is never erased by an empty refresh.
         self.assertTrue(
             self.cache.save(
                 self.ticker,
                 {
                     "overview": {"symbol": "MCD"},
-                    "dividends": replacement,
+                    "dividends": {"symbol": "MCD", "rows": []},
                 },
             )
         )
 
-        self.assertEqual(self.cache.load(self.ticker)["dividends"], replacement)
+        self.assertEqual(
+            self.cache.load(self.ticker)["dividends"], self.previous_dividends
+        )
 
     def test_error_only_dividend_table_keeps_previous_history(self):
         self.assertTrue(
@@ -157,9 +160,9 @@ class CacheRefreshTests(unittest.TestCase):
 
     @patch("app.scraper.sa.STOCKANALYSIS_DEBUG_SCREENSHOT_DIR")
     def test_source_failure_screenshot_is_available_in_headless_mode(self, directory):
-        directory.__truediv__.side_effect = lambda filename: Path(
-            self.temp_dir.name
-        ) / filename
+        directory.__truediv__.side_effect = (
+            lambda filename: Path(self.temp_dir.name) / filename
+        )
         page = type("Page", (), {"screenshot": AsyncMock()})()
 
         import asyncio

@@ -11,7 +11,7 @@ from app.config import DB_PATH
 
 
 class DB:
-    """Access the OHLC database.
+    """Access the shared OHLC and LLM-usage database.
 
     API and HQL callers use the read-only default. The one scheduled worker opts
     into ``read_only=False`` for short, batched write transactions.
@@ -56,6 +56,28 @@ class DB:
                 """
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_ohlc_symbol ON ohlc(symbol)")
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS llm_invocations (
+                    id INTEGER PRIMARY KEY,
+                    started_at TEXT NOT NULL,
+                    operation TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    ticker TEXT,
+                    status TEXT NOT NULL,
+                    duration_ms REAL NOT NULL,
+                    prompt_tokens INTEGER,
+                    output_tokens INTEGER,
+                    thinking_tokens INTEGER,
+                    cached_tokens INTEGER,
+                    tool_prompt_tokens INTEGER,
+                    total_tokens INTEGER,
+                    estimated_token_cost_usd REAL,
+                    pricing_json TEXT,
+                    error_type TEXT
+                )
+                """
+            )
             conn.commit()
 
     def _connect(self) -> sqlite3.Connection:

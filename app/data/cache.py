@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import fcntl
 import json
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from app.core.logger import get_logger
 from app.data.files import atomic_write_json
+from app.data.merge import merge_ticker
 from app.utils.time_utils import dubai_now_iso
 from app.config import CACHE_DIR
 
@@ -17,7 +20,7 @@ class Cache:
     Fundamental cache (flat structure)
 
     - cache/ADX_FAB.json
-    - overwrite on save
+    - merge on save (see app/data/merge.py)
     """
 
     def __init__(
@@ -49,51 +52,35 @@ class Cache:
             isinstance(s, dict) and "error" in s for s in sections
         )
 
-    @staticmethod
-    def _section_failed(section: Any) -> bool:
-        """Return whether a scraper section carries no usable result.
+    @contextmanager
+    def _write_lock(self, ticker_key: str) -> Iterator[None]:
+        """Serialise load-merge-write per ticker across worker and scripts."""
+        lock_dir = self.cache_dir / ".locks"
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        with (lock_dir / f"{self._safe_ticker(ticker_key)}.lock").open("w") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
-        An empty ``rows`` list is valid: companies can genuinely have no
-        dividend history.  Conversely, a section set to ``None`` by the
-        scraper orchestration, or a table containing only its captured error,
-        must never replace a previously successful section.
-        """
-        if not isinstance(section, dict) or "error" in section:
-            return True
-
-        rows = section.get("rows")
-        return bool(rows) and all(
-            isinstance(row, dict) and "error" in row for row in rows
+    def _archive_superseded(
+        self, ticker_key: str, section_name: str, section: Any
+    ) -> None:
+        """Keep discarded history recoverable instead of silently losing it."""
+        stamp = dubai_now_iso().replace(":", "").replace("+", "_")
+        path = (
+            self.cache_dir
+            / "archive"
+            / f"{self._safe_ticker(ticker_key)}.{section_name}.{stamp}.json"
         )
-
-    @classmethod
-    def _preserve_successful_sections(
-        cls, previous: dict[str, Any] | None, incoming: dict[str, Any]
-    ) -> dict[str, Any]:
-        """Keep last-known-good scraped sections when a refresh is partial."""
-        if not isinstance(previous, dict):
-            return incoming
-
-        merged = dict(incoming)
-        for section_name in (
-            "overview",
-            "financials",
-            "dividends",
-            "statistics",
-            "ratios",
-        ):
-            if not cls._section_failed(merged.get(section_name)):
-                continue
-
-            prior_section = previous.get(section_name)
-            if not cls._section_failed(prior_section):
-                merged[section_name] = prior_section
-                logger.warning(
-                    "Keeping last known good %s section during partial refresh",
-                    section_name,
-                )
-
-        return merged
+        try:
+            atomic_write_json(path, section)
+            logger.warning(
+                "Archived superseded %s %s -> %s", ticker_key, section_name, path
+            )
+        except Exception:
+            logger.exception("Failed to archive %s %s", ticker_key, section_name)
 
     def save(self, ticker_key: str, data: dict[str, Any]) -> bool:
         if self.read_only:
@@ -103,16 +90,22 @@ class Cache:
             logger.warning("Cache skip %s: payload contains error", ticker_key)
             return False
 
-        # A ticker refresh is intentionally sectional: source pages can fail
-        # independently.  Merge before publishing so a transient timeout
-        # cannot erase history that powers the dividends ledger.
-        payload = self._preserve_successful_sections(self.load(ticker_key), data)
-        payload["last_updated"] = data.get("scraped_at") or dubai_now_iso()
-
         path = self._path(ticker_key)
 
         try:
-            atomic_write_json(path, payload)
+            with self._write_lock(ticker_key):
+                # Source pages fail independently and only show a rolling
+                # window, so merge into the cached document rather than
+                # overwrite: failed sections keep their last good copy and
+                # history that scrolled off the source is retained.
+                payload, report = merge_ticker(self.load(ticker_key), data)
+                for note in report.notes:
+                    logger.info("Cache merge %s | %s", ticker_key, note)
+                for section_name, section in report.superseded.items():
+                    self._archive_superseded(ticker_key, section_name, section)
+                payload["last_updated"] = data.get("scraped_at") or dubai_now_iso()
+
+                atomic_write_json(path, payload)
 
             logger.info("Cached %s -> %s", ticker_key, path)
             return True

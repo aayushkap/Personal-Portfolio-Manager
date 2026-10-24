@@ -18,9 +18,11 @@ class DetailRawFundamentalsTests(unittest.TestCase):
         module.hql = SimpleNamespace(ticker=Mock(return_value=query), portfolio=Mock())
         module._build_overlays = Mock(return_value={})
         module._build_chart = Mock(return_value=[])
-        module._build_fundamentals = Mock(return_value={
-            "dividends_yields": {"dividend_yield": 0.06379},
-        })
+        module._build_fundamentals = Mock(
+            return_value={
+                "dividends_yields": {"dividend_yield": 0.06379},
+            }
+        )
         module._build_transactions = Mock(return_value=[])
         return module
 
@@ -29,25 +31,38 @@ class DetailRawFundamentalsTests(unittest.TestCase):
             with patch("app.services.holdings.HoldingsNewsAgent") as news:
                 news.return_value.merge_news.return_value = []
                 return module.get_holding_detail("LSE:TEST")
-        with patch("app.services.watchlist.WatchlistAIScreener") as screener, patch.object(
-            HoldingsModule, "_build_transactions", return_value=[]
+        with (
+            patch("app.services.watchlist.WatchlistAIScreener") as screener,
+            patch.object(HoldingsModule, "_build_transactions", return_value=[]),
         ):
             screener.return_value.merge_alerts.side_effect = lambda rows: rows
             return module.get_watchlist_detail("LSE:TEST")
 
-    def test_both_details_preserve_complete_dividend_history_and_other_cache_fields(self):
+    def test_both_details_preserve_complete_dividend_history_and_other_cache_fields(
+        self,
+    ):
         raw = {
             "ticker": "LON:TEST",
             "dividends": {
-                "headers": ["Ex-Dividend Date", "Cash Amount", "Record Date", "Pay Date"],
-                "rows": [{
-                    "Ex-Dividend Date": f"{2026 - index}-09-24",
-                    "Cash Amount": "£0.2805",
-                    "Record Date": f"{2026 - index}-09-25",
-                    "Pay Date": f"{2026 - index}-10-29",
-                } for index in range(10)],
+                "headers": [
+                    "Ex-Dividend Date",
+                    "Cash Amount",
+                    "Record Date",
+                    "Pay Date",
+                ],
+                "rows": [
+                    {
+                        "Ex-Dividend Date": f"{2026 - index}-09-24",
+                        "Cash Amount": "£0.2805",
+                        "Record Date": f"{2026 - index}-09-25",
+                        "Pay Date": f"{2026 - index}-10-29",
+                    }
+                    for index in range(10)
+                ],
             },
-            "statistics": {"sections": {"Important Dates": {"Earnings Date": "2026-11-06"}}},
+            "statistics": {
+                "sections": {"Important Dates": {"Earnings Date": "2026-11-06"}}
+            },
             "financials": {"rows": [{"Fiscal Year": "Revenue", "TTM": "40,499"}]},
             "new_provider_data": {"unavailable": "n/a", "zero": 0},
         }
@@ -57,7 +72,10 @@ class DetailRawFundamentalsTests(unittest.TestCase):
                 response = self.response(self.make_module(cls, raw))
                 self.assertEqual(response["raw_data"], expected)
                 self.assertEqual(len(response["raw_data"]["dividends"]["rows"]), 10)
-                self.assertEqual(response["fundamentals"]["dividends_yields"]["dividend_yield"], 0.06379)
+                self.assertEqual(
+                    response["fundamentals"]["dividends_yields"]["dividend_yield"],
+                    0.06379,
+                )
                 self.assertEqual(response["ticker"], "LSE:TEST")
                 self.assertEqual(raw, expected)
 

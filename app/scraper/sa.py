@@ -33,6 +33,7 @@ from app.config import (
     STOCKANALYSIS_DEBUG_SCREENSHOT_DIR,
     STOCKANALYSIS_HEADLESS,
 )
+from app.data.merge import return_metric_rows
 from app.utils.time_utils import dubai_now_iso
 
 from app.core.logger import get_logger
@@ -145,7 +146,7 @@ class StockAnalysisScraper:
         # StockAnalysis' /etf/ URLs are for US-listed funds.  Foreign ETFs
         # such as LON:EIMI and LON:XUSE live under their exchange quote URL,
         # even though their source metadata correctly classifies them as ETFs.
-        us_exchanges = {"NYSE", "NASDAQ", "AMEX", "OTC", "BATS"}
+        us_exchanges = {"NYSE", "NASDAQ", "AMEX", "OTC", "BATS", "CBOE"}
         if is_etf and exchange.upper() in us_exchanges:
             return f"https://stockanalysis.com/etf/{symbol.lower()}"
 
@@ -936,14 +937,7 @@ class StockAnalysisScraper:
         except Exception as exc:
             rows = [{"error": str(exc)}]
 
-        return_rows = [
-            r
-            for r in rows
-            if any(
-                kw in r.get(headers[0] if headers else "col_0", "").upper()
-                for kw in ("ROE", "ROA", "ROIC", "ROCE", "RETURN")
-            )
-        ]
+        return_rows = return_metric_rows(rows, headers)
 
         result = {
             "symbol": symbol,

@@ -1,8 +1,8 @@
 import json
 import random
-from app.config import QUOTE_PATH, GEMINI_KEY
+from app.config import QUOTE_PATH
 from app.data.files import atomic_write_json
-from google import genai
+from app.services.llm import GeminiLLM
 from google.genai import types
 
 # Use SystemRandom so entropy is re-pulled from the OS on every single call,
@@ -210,7 +210,7 @@ Return ONLY valid JSON. Nothing else. No preamble. No explanation. No markdown."
 
 class QuoteStore:
     def __init__(self, model: str = "gemini-3.7-flash"):
-        self.client = genai.Client(api_key=GEMINI_KEY)
+        self.llm = GeminiLLM()
         self.model = model
 
     def _load_history(self) -> list[str]:
@@ -240,7 +240,8 @@ class QuoteStore:
             n=len(history),
         )
 
-        response = self.client.models.generate_content(
+        response = self.llm.generate_content(
+            operation="quote",
             model=self.model,
             contents=prompt,
             config=types.GenerateContentConfig(

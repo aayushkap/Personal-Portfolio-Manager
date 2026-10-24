@@ -5,12 +5,12 @@ import re
 from datetime import date, datetime, timedelta
 from typing import Optional
 
-from google import genai
 from google.genai import types
 
 from app.core.logger import get_logger
-from app.config import CACHE_DIR, GEMINI_KEY
+from app.config import CACHE_DIR
 from app.data.files import atomic_write_json
+from app.services.llm import GeminiLLM
 
 from app.hql import HQL
 
@@ -82,7 +82,7 @@ exact structure:
 
 class HoldingsNewsAgent:
     def __init__(self, model: str = "gemini-2.5-flash"):
-        self.client = genai.Client(api_key=GEMINI_KEY)
+        self.llm = GeminiLLM()
         self.model = model
         self._grounding_tool = types.Tool(google_search=types.GoogleSearch())
 
@@ -208,7 +208,9 @@ class HoldingsNewsAgent:
             default_next=default_next,
         )
 
-        response = self.client.models.generate_content(
+        response = self.llm.generate_content(
+            operation="holdings_news",
+            ticker=ticker,
             model=self.model,
             contents=prompt,
             config=types.GenerateContentConfig(
